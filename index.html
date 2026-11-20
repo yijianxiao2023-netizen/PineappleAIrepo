@@ -396,7 +396,9 @@ const KEYS = {
 };
 const MAX_TOOL_ROUNDS = 3;
 const MAX_CHATS = 60;
-const CONTEXT_CHARS = 7000;
+const CONTEXT_WINDOW = 8192;
+const CONTEXT_CHARS = 12000;
+const MAX_MESSAGE_CHARS = 10000;
 const SEND_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
 const STOP_ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
 const TYPING = '<span class="typing"><i></i><i></i><i></i></span>';
@@ -437,13 +439,13 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-function systemPrompt() {
+function systemPrompt(chat) {
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
   const mem = memory.length
     ? `\n\nWhat you remember about the user from earlier chats:\n${memory.map((m) => "- " + m).join("\n")}\nUse these naturally when they're relevant. Don't list them unless asked.`
     : "";
   return `You are Pineapple AI, a friendly, smart and helpful assistant. Today is ${today}.
-Never reveal what underlying model you are, who trained you, or what company made you. If asked, say you are Pineapple AI.${mem}
+Never reveal what underlying model you are, who trained you, or what company made you. If asked, say you are Pineapple AI.${mem}${chat?.summary ? `\n\nSummary of the earlier part of this chat (older messages are no longer shown to you word for word):\n${chat.summary}` : ""}
 
 You have two tools:
 1. search_wikipedia: look up facts you aren't sure about (people, places, history, science, events, statistics). Arguments: {"query": "short search terms"}
@@ -566,7 +568,7 @@ async function init() {
         model: `${host}/mlc-ai/${modelId}`,
         model_id: modelId,
         model_lib: new URL(`lib/${base}-${quant}_cs1k-webgpu.wasm`, location.href).href,
-        overrides: { context_window_size: 4096 },
+        overrides: { context_window_size: CONTEXT_WINDOW },
       }],
     };
     setProgress(0, "cache");
@@ -788,17 +790,66 @@ function getChat(id) {
   return chats.find((c) => c.id === id) || null;
 }
 
-function contextFor(chat) {
-  const turns = chat ? chat.turns : [];
-  const kept = [];
-  let size = 0;
-  for (let i = turns.length - 1; i >= 0; i--) {
-    const len = turns[i].reduce((n, m) => n + m.content.length, 0);
-    if (kept.length && size + len > CONTEXT_CHARS) break;
-    kept.unshift(turns[i]);
-    size += len;
+const turnSize = (t) => t.reduce((n, m) => n + m.content.length, 0);
+const turnsSize = (ts) => ts.reduce((n, t) => n + turnSize(t), 0);
+
+function compactTurn(t) {
+  const last = t[t.length - 1];
+  return t.length > 2 && last.role === "assistant" ? [t[0], last] : t;
+}
+
+function liveTurns(chat) {
+  if (!chat) return [];
+  let turns = chat.turns.slice(chat.summarized || 0);
+  if (turnsSize(turns) > CONTEXT_CHARS) {
+    turns = turns.map((t, i) => (i < turns.length - 2 ? compactTurn(t) : t));
   }
-  return kept.flat();
+  return turns;
+}
+
+function contextFor(chat) {
+  return liveTurns(chat).flat();
+}
+
+async function summarizeOldTurns(chat) {
+  const live = liveTurns(chat);
+  const count = Math.max(1, live.length - 2);
+  const chunk = live.slice(0, count);
+  const transcript = chunk.map((t) => {
+    const user = t[0].content;
+    const reply = t[t.length - 1].role === "assistant" ? t[t.length - 1].content : "";
+    return `User: ${user}\nAssistant: ${reply}`;
+  }).join("\n\n").slice(0, 16000);
+  const res = await engine.chat.completions.create({
+    messages: [
+      { role: "system", content: "You write short, accurate summaries of conversations." },
+      { role: "user", content: `${chat.summary ? `Summary so far:\n${chat.summary}\n\n` : ""}New part of the conversation:\n${transcript}\n\nWrite one updated summary of the whole conversation so far, under 250 words. Keep every important detail: names, facts, numbers, decisions, what the user is working on or asking for, and anything left unfinished. Plain text only.` },
+    ],
+    temperature: 0.3,
+    max_tokens: 500,
+    extra_body: { enable_thinking: false },
+  });
+  const summary = visibleText(res.choices?.[0]?.message?.content || "").trim();
+  if (!summary) throw new Error("Empty summary");
+  chat.summary = summary.slice(0, 2500);
+  chat.summarized = (chat.summarized || 0) + count;
+}
+
+async function fitContext(chat, wrap, incoming) {
+  let status = null;
+  let guard = 0;
+  if (turnsSize(liveTurns(chat)) + incoming <= CONTEXT_CHARS) return;
+  const target = CONTEXT_CHARS * 0.5;
+  while (turnsSize(liveTurns(chat)) + incoming > target && liveTurns(chat).length > 1 && guard++ < 6) {
+    if (!status) status = addStatus(wrap, "Catching up on earlier messages");
+    try {
+      await summarizeOldTurns(chat);
+    } catch (e) {
+      console.warn("Summary failed, dropping oldest turn instead", e);
+      chat.summarized = (chat.summarized || 0) + 1;
+    }
+  }
+  if (status) status.remove();
 }
 
 function renderChatList() {
@@ -872,6 +923,11 @@ async function send(textOverride) {
   const text = (textOverride ?? $("input").value).trim();
   if (!text || !engine) return;
   if (!user) { requireSignIn(); return; }
+  if (text.length > MAX_MESSAGE_CHARS) {
+    $("input").value = text;
+    addMessage("assistant", "").querySelector(".body").innerHTML = render(`That message is too long for me (${text.length.toLocaleString()} characters). Please keep it under ${MAX_MESSAGE_CHARS.toLocaleString()}, or split it into parts.`);
+    return;
+  }
   $("input").value = "";
   autosize();
   stopped = false;
@@ -895,14 +951,17 @@ async function send(textOverride) {
   const body = wrap.querySelector(".body");
   body.innerHTML = TYPING;
 
-  const system = { role: "system", content: systemPrompt() };
-  const history = contextFor(chat);
   const turn = [{ role: "user", content: text }];
   const sources = [];
   const statuses = [];
   let answer = "";
+  let system;
+  let history;
 
   try {
+    await fitContext(chat, wrap, text.length + 2500);
+    system = { role: "system", content: systemPrompt(chat) };
+    history = contextFor(chat);
     for (let round = 0; ; round++) {
       const raw = await generate([system, ...history, ...turn], (full) => {
         const v = visibleText(full);
@@ -1174,6 +1233,7 @@ async function syncAll() {
       const remote = new Map(chatRes.data.map((r) => [r.id, {
         id: r.id, title: r.title, updated: Number(r.updated),
         view: r.data?.view || [], turns: r.data?.turns || [], synced: true,
+        summary: r.data?.summary || "", summarized: Number(r.data?.summarized || 0),
       }]));
       const merged = new Map(remote);
       const upload = [];
@@ -1228,7 +1288,7 @@ async function pushChat(c) {
   try {
     const { error } = await sb.from("chats").upsert({
       user_id: user.id, id: c.id, title: c.title, updated: c.updated,
-      data: { view: c.view, turns: c.turns },
+      data: { view: c.view, turns: c.turns, summary: c.summary || "", summarized: c.summarized || 0 },
     }, { onConflict: "user_id,id" });
     if (error) throw error;
     c.synced = true;
