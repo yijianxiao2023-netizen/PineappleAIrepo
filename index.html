@@ -1,0 +1,964 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pineapple AI</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍍</text></svg>">
+<style>
+  :root {
+    --bg: #fffbf2;
+    --side: #fbf4e4;
+    --panel: #ffffff;
+    --ink: #2b2a26;
+    --muted: #8a8577;
+    --line: #efe6d2;
+    --gold: #f5b628;
+    --gold-dark: #d9940c;
+    --leaf: #3a9d4f;
+    --user: #fff1c7;
+    --hover: #f6ecd6;
+    --radius: 18px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1916;
+      --side: #201f1b;
+      --panel: #24231f;
+      --ink: #f1ede3;
+      --muted: #9c968a;
+      --line: #35332d;
+      --user: #3d3420;
+      --hover: #2d2b26;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  [hidden] { display: none !important; }
+  button { font: inherit; color: inherit; }
+
+  #loader {
+    position: fixed; inset: 0; z-index: 50; background: var(--bg);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px; padding: 24px; text-align: center;
+    transition: opacity .5s ease;
+  }
+  #loader.fade { opacity: 0; pointer-events: none; }
+  .pine-big { width: 84px; height: 104px; animation: bob 1.6s ease-in-out infinite; }
+  @keyframes bob { 0%,100% { transform: translateY(0) rotate(-4deg); } 50% { transform: translateY(-10px) rotate(4deg); } }
+  .brand { font-size: 28px; font-weight: 700; letter-spacing: -.02em; }
+  .bar { width: min(320px, 80vw); height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0%; background: linear-gradient(90deg, var(--gold), var(--leaf)); border-radius: 99px; transition: width .3s ease; }
+  .load-text { color: var(--muted); font-size: 14px; min-height: 1.5em; }
+  .load-hint { color: var(--muted); font-size: 13px; max-width: 340px; }
+  .load-error { max-width: 420px; }
+  .load-error button { margin-top: 14px; }
+
+  #app { height: 100%; display: grid; grid-template-columns: 270px 1fr; }
+  aside {
+    background: var(--side); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .side-top { padding: 14px 12px 8px; display: flex; flex-direction: column; gap: 12px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; padding: 0 6px; }
+  .logo svg { width: 24px; height: 30px; }
+  .new-btn {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    border: 1px solid var(--line); background: var(--panel);
+    padding: 9px 12px; border-radius: 12px; cursor: pointer; font-size: 14px; font-weight: 600;
+  }
+  .new-btn:hover { border-color: var(--gold); }
+  .list-label { font-size: 12px; color: var(--muted); padding: 8px 18px 4px; text-transform: uppercase; letter-spacing: .06em; }
+  #chat-list { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+  .chat-item {
+    display: flex; align-items: center; gap: 4px; border-radius: 10px;
+  }
+  .chat-item:hover, .chat-item.active { background: var(--hover); }
+  .chat-item .open {
+    flex: 1; min-width: 0; text-align: left; border: 0; background: none; cursor: pointer;
+    padding: 8px 10px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .chat-item .del {
+    border: 0; background: none; cursor: pointer; color: var(--muted);
+    width: 28px; height: 28px; border-radius: 8px; opacity: 0; flex-shrink: 0;
+  }
+  .chat-item:hover .del, .chat-item.active .del { opacity: 1; }
+  .chat-item .del:hover { color: var(--ink); background: var(--line); }
+  .no-chats { color: var(--muted); font-size: 13px; padding: 8px 10px; }
+  .side-bottom { border-top: 1px solid var(--line); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .side-link {
+    display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: none;
+    padding: 8px 10px; border-radius: 10px; cursor: pointer; font-size: 14px; text-align: left;
+  }
+  .side-link:hover { background: var(--hover); }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; background: var(--line); border-radius: 12px; padding: 3px; }
+  .seg button {
+    border: 0; background: none; padding: 7px 0; border-radius: 9px; cursor: pointer; font-size: 13.5px; font-weight: 600; color: var(--muted);
+  }
+  .seg button.on { background: var(--panel); color: var(--ink); box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  .seg-hint { font-size: 12px; color: var(--muted); padding: 0 4px; }
+
+  main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .topbar { display: none; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .icon-btn {
+    width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel);
+    display: grid; place-items: center; cursor: pointer;
+  }
+  .icon-btn svg { width: 18px; height: 18px; }
+  #backdrop { display: none; }
+
+  @media (max-width: 800px) {
+    #app { grid-template-columns: 1fr; }
+    aside {
+      position: fixed; inset: 0 auto 0 0; width: min(300px, 85vw); z-index: 20;
+      transform: translateX(-100%); transition: transform .25s ease;
+    }
+    aside.open { transform: none; box-shadow: 0 0 40px rgba(0,0,0,.2); }
+    #backdrop.show { display: block; position: fixed; inset: 0; background: rgba(0,0,0,.3); z-index: 15; }
+    .topbar { display: flex; }
+  }
+
+  #scroll { flex: 1; overflow-y: auto; }
+  #messages { max-width: 760px; margin: 0 auto; padding: 24px 18px 12px; display: flex; flex-direction: column; gap: 18px; }
+
+  #empty { display: flex; flex-direction: column; align-items: center; text-align: center; padding-top: 12vh; gap: 10px; }
+  #empty svg { width: 56px; height: 70px; }
+  #empty h1 { font-size: 26px; margin: 6px 0 4px; letter-spacing: -.02em; }
+  #empty p { color: var(--muted); margin: 0 0 14px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; max-width: 560px; }
+  .chip {
+    border: 1px solid var(--line); background: var(--panel);
+    padding: 9px 14px; border-radius: 99px; font-size: 14px; cursor: pointer;
+  }
+  .chip:hover { border-color: var(--gold); }
+
+  .msg { display: flex; }
+  .msg.user { justify-content: flex-end; }
+  .msg.user .body {
+    background: var(--user); padding: 10px 15px; border-radius: var(--radius) var(--radius) 6px var(--radius);
+    max-width: 80%; white-space: pre-wrap; word-wrap: break-word;
+  }
+  .msg.assistant { flex-direction: column; gap: 8px; }
+  .msg.assistant .body { max-width: 100%; word-wrap: break-word; }
+  .body p { margin: 0 0 .7em; }
+  .body p:last-child { margin-bottom: 0; }
+  .body ul, .body ol { margin: .2em 0 .8em; padding-left: 1.4em; }
+  .body h4 { margin: .8em 0 .3em; font-size: 1.05em; }
+  .body code { background: var(--line); padding: 1px 6px; border-radius: 6px; font-size: .9em; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .body pre { background: var(--panel); border: 1px solid var(--line); padding: 12px 14px; border-radius: 12px; overflow-x: auto; }
+  .body pre code { background: none; padding: 0; }
+
+  .status {
+    display: inline-flex; align-items: center; gap: 8px; align-self: flex-start;
+    font-size: 13px; color: var(--muted);
+    border: 1px solid var(--line); background: var(--panel);
+    padding: 5px 11px; border-radius: 99px; max-width: 100%;
+  }
+  .status span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--gold); animation: pulse 1s ease-in-out infinite; flex-shrink: 0; }
+  .status.done .dot { background: var(--leaf); animation: none; }
+  @keyframes pulse { 50% { opacity: .3; } }
+
+  .sources { display: flex; flex-wrap: wrap; gap: 6px; }
+  .sources a {
+    font-size: 12.5px; color: var(--ink); text-decoration: none;
+    border: 1px solid var(--line); background: var(--panel);
+    padding: 4px 10px; border-radius: 99px;
+  }
+  .sources a:hover { border-color: var(--gold); }
+
+  .typing { display: inline-flex; gap: 4px; padding: 6px 0; }
+  .typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
+  .typing i:nth-child(2) { animation-delay: .15s; }
+  .typing i:nth-child(3) { animation-delay: .3s; }
+  @keyframes blink { 0%,80%,100% { opacity: .25; } 40% { opacity: 1; } }
+
+  footer { padding: 10px 18px calc(16px + env(safe-area-inset-bottom)); }
+  .composer {
+    max-width: 760px; margin: 0 auto;
+    display: flex; align-items: flex-end; gap: 8px;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 24px; padding: 8px 8px 8px 18px;
+    box-shadow: 0 4px 24px rgba(120, 90, 20, .08);
+  }
+  .composer:focus-within { border-color: var(--gold); }
+  textarea {
+    flex: 1; border: 0; outline: 0; resize: none; background: transparent; color: var(--ink);
+    font: inherit; padding: 8px 0; max-height: 180px;
+  }
+  #send {
+    width: 40px; height: 40px; border-radius: 50%; border: 0; cursor: pointer;
+    background: var(--gold); color: #2b2a26; display: grid; place-items: center; flex-shrink: 0;
+  }
+  #send:hover { background: var(--gold-dark); }
+  #send:disabled { opacity: .4; cursor: default; }
+  #send svg { width: 18px; height: 18px; }
+  .fine { text-align: center; color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+  dialog {
+    border: 1px solid var(--line); border-radius: 18px; padding: 0; width: min(460px, 92vw);
+    background: var(--panel); color: var(--ink); box-shadow: 0 20px 60px rgba(0,0,0,.25);
+  }
+  dialog::backdrop { background: rgba(0,0,0,.35); }
+  .dlg-head { display: flex; justify-content: space-between; align-items: center; padding: 16px 18px 6px; }
+  .dlg-head h2 { margin: 0; font-size: 18px; }
+  .dlg-body { padding: 6px 18px 12px; }
+  .dlg-body p { color: var(--muted); font-size: 14px; margin: 0 0 12px; }
+  #memory-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow-y: auto; }
+  #memory-list li {
+    display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 8px 8px 12px; font-size: 14px;
+  }
+  #memory-list li span { flex: 1; }
+  #memory-list .del { border: 0; background: none; cursor: pointer; color: var(--muted); width: 28px; height: 28px; border-radius: 8px; }
+  #memory-list .del:hover { background: var(--line); color: var(--ink); }
+  .mem-empty { color: var(--muted); font-size: 14px; }
+  .dlg-foot { display: flex; justify-content: space-between; gap: 8px; padding: 10px 18px 16px; }
+  .ghost {
+    border: 1px solid var(--line); background: var(--panel);
+    padding: 7px 14px; border-radius: 99px; font-size: 14px; cursor: pointer;
+  }
+  .ghost:hover { border-color: var(--gold); }
+  .ghost.danger:hover { border-color: #d9534f; color: #d9534f; }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <clipPath id="pine-clip"><ellipse cx="32" cy="54" rx="20" ry="24"/></clipPath>
+    <symbol id="pine" viewBox="0 0 64 80">
+      <g fill="#3a9d4f">
+        <path d="M32 32 C25 22 20 14 12 9 C22 10 29 17 32 25 Z"/>
+        <path d="M32 32 C39 22 44 14 52 9 C42 10 35 17 32 25 Z"/>
+        <path d="M32 30 C29 18 30 9 32 1 C34 9 35 18 32 30 Z"/>
+      </g>
+      <ellipse cx="32" cy="54" rx="20" ry="24" fill="#f5b628"/>
+      <g clip-path="url(#pine-clip)" stroke="#d9940c" stroke-width="1.8" fill="none" stroke-linecap="round">
+        <path d="M0 34 L46 80 M4 26 L58 80 M14 24 L64 74 M26 24 L64 62 M38 24 L64 50"/>
+        <path d="M64 34 L18 80 M60 26 L6 80 M50 24 L0 74 M38 24 L0 62 M26 24 L0 50"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>
+
+<div id="loader">
+  <svg class="pine-big"><use href="#pine"/></svg>
+  <div class="brand">Pineapple AI</div>
+  <div id="load-main">
+    <div class="bar"><div id="bar-fill"></div></div>
+    <div class="load-text" id="load-text">Getting ripe… 0%</div>
+    <div class="load-hint">The first visit takes a minute. After that it opens almost instantly, even offline.</div>
+  </div>
+  <div class="load-error" id="load-error" hidden></div>
+</div>
+
+<div id="app" hidden>
+  <aside id="sidebar">
+    <div class="side-top">
+      <div class="logo"><svg><use href="#pine"/></svg>Pineapple AI</div>
+      <button class="new-btn" id="new-chat">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        New chat
+      </button>
+    </div>
+    <div class="list-label">Chats</div>
+    <div id="chat-list"></div>
+    <div class="side-bottom">
+      <button class="side-link" id="open-memory">🧠 Memory</button>
+      <div class="seg" id="mode-seg">
+        <button data-mode="fast">⚡ Fast</button>
+        <button data-mode="smart">🧠 Smart</button>
+      </div>
+      <div class="seg-hint" id="mode-hint"></div>
+    </div>
+  </aside>
+  <div id="backdrop"></div>
+
+  <main>
+    <div class="topbar">
+      <button class="icon-btn" id="menu" aria-label="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <div class="logo"><svg><use href="#pine"/></svg>Pineapple AI</div>
+    </div>
+    <div id="scroll">
+      <div id="messages">
+        <div id="empty">
+          <svg><use href="#pine"/></svg>
+          <h1>What can I help with?</h1>
+          <p>Ask me anything. I can look things up on Wikipedia and remember things you tell me.</p>
+          <div class="chips">
+            <button class="chip">Who was Ada Lovelace?</button>
+            <button class="chip">How do black holes form?</button>
+            <button class="chip">Explain recursion simply</button>
+            <button class="chip">Write a haiku about pineapples</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <footer>
+      <div class="composer">
+        <textarea id="input" rows="1" placeholder="Message Pineapple AI"></textarea>
+        <button id="send" aria-label="Send"></button>
+      </div>
+      <div class="fine">Pineapple AI runs on your device and can make mistakes.</div>
+    </footer>
+  </main>
+</div>
+
+<dialog id="memory-dialog">
+  <div class="dlg-head">
+    <h2>🧠 Memory</h2>
+    <button class="ghost" id="close-memory">Done</button>
+  </div>
+  <div class="dlg-body">
+    <p>Pineapple AI uses these in every chat. They're saved only on this device.</p>
+    <ul id="memory-list"></ul>
+  </div>
+  <div class="dlg-foot">
+    <button class="ghost danger" id="clear-memory">Clear all memory</button>
+    <button class="ghost danger" id="clear-chats">Delete all chats</button>
+  </div>
+</dialog>
+
+<script type="module">
+const WEBLLM_URLS = [
+  "./lib/web-llm.js",
+  "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.89/+esm",
+  "https://esm.run/@mlc-ai/web-llm@0.2.89",
+];
+const WEIGHT_HOSTS = ["https://huggingface.co", "https://hf-mirror.com"];
+const MODELS = { fast: "Qwen3-1.7B", smart: "Qwen3-4B" };
+const MODE_HINTS = {
+  fast: "Quicker replies. Great for most things.",
+  smart: "Better answers, slower. Bigger one-time download.",
+};
+const KEYS = {
+  chats: "pineapple-chats",
+  memory: "pineapple-memory",
+  mode: "pineapple-mode",
+  host: "pineapple-weight-host",
+};
+const MAX_TOOL_ROUNDS = 3;
+const MAX_CHATS = 60;
+const CONTEXT_CHARS = 7000;
+const SEND_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
+const STOP_ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+const TYPING = '<span class="typing"><i></i><i></i><i></i></span>';
+
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { console.warn("Storage full?", e); } },
+};
+
+let webllm = null;
+let engine = null;
+let busy = false;
+let stopped = false;
+let shownProgress = 0;
+let lastProgressAt = Date.now();
+let chats = store.get(KEYS.chats, []);
+let memory = store.get(KEYS.memory, []);
+let mode = store.get(KEYS.mode, "fast") === "smart" ? "smart" : "fast";
+let currentId = null;
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function systemPrompt() {
+  const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const mem = memory.length
+    ? `\n\nWhat you remember about the user from earlier chats:\n${memory.map((m) => "- " + m).join("\n")}\nUse these naturally when they're relevant. Don't list them unless asked.`
+    : "";
+  return `You are Pineapple AI, a friendly, smart and helpful assistant. Today is ${today}.
+Never reveal what underlying model you are, who trained you, or what company made you. If asked, say you are Pineapple AI.${mem}
+
+You have two tools:
+1. search_wikipedia: look up facts you aren't sure about (people, places, history, science, events, statistics). Arguments: {"query": "short search terms"}
+2. remember: save a lasting fact about the user for future chats, when they share something worth remembering (name, preferences, projects, goals) or ask you to remember something. Arguments: {"fact": "short fact, e.g. The user's name is Sam"}
+To use a tool, reply with ONLY:
+<tool_call>
+{"name": "TOOL_NAME", "arguments": {...}}
+</tool_call>
+Results come back in <tool_response>, then you continue. Don't use tools for greetings, math, coding, opinions, or creative writing.
+Write clear, well-organized answers. Use short paragraphs and bullet lists when helpful.`;
+}
+
+function setProgress(p, text) {
+  lastProgressAt = Date.now();
+  shownProgress = Math.max(shownProgress, Math.min(0.99, p || 0));
+  const pct = Math.round(shownProgress * 100);
+  $("bar-fill").style.width = pct + "%";
+  const mb = (text || "").match(/(\d+)\s*MB (fetched|loaded)/i);
+  let label = `Getting ripe… ${pct}%`;
+  if (mb) label += ` · ${mb[1]} MB`;
+  else if (/shader|compil|gpu/i.test(text || "")) label = `Warming up… ${pct}%`;
+  else if (/cache/i.test(text || "") && pct === 0) label = "Getting ripe… starting download";
+  $("load-text").textContent = label;
+}
+
+function showLoadError(html) {
+  $("load-main").hidden = true;
+  const box = $("load-error");
+  box.innerHTML = html;
+  box.hidden = false;
+  document.querySelector(".pine-big").style.animation = "none";
+}
+
+function cleanError(err) {
+  return esc(String(err?.message || err || "Unknown error").replace(/Qwen\S*/gi, "the model").slice(0, 300));
+}
+
+async function loadLibrary() {
+  for (const url of WEBLLM_URLS) {
+    try { return await import(url); } catch (e) { console.warn("Couldn't load engine from", url, e); }
+  }
+  throw new Error("Couldn't download the AI engine. Check your internet connection or any ad/script blocker.");
+}
+
+async function pickQuant() {
+  if (!navigator.gpu) return null;
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) return null;
+  return adapter.features.has("shader-f16") ? "q4f16_1" : "q4f32_1";
+}
+
+async function reachable(url) {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const r = await fetch(url, { cache: "no-store", signal: ctrl.signal });
+    clearTimeout(t);
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function isCached(url) {
+  try {
+    for (const name of await caches.keys()) {
+      if (await (await caches.open(name)).match(url)) return true;
+    }
+  } catch {}
+  return false;
+}
+
+async function pickWeightHost(modelId) {
+  const probe = (host) => `${host}/mlc-ai/${modelId}/resolve/main/mlc-chat-config.json`;
+  const saved = store.get(KEYS.host, null);
+  if (saved && WEIGHT_HOSTS.includes(saved)) {
+    if (await isCached(probe(saved))) return saved;
+    if (navigator.onLine && await reachable(probe(saved))) return saved;
+  }
+  for (const host of WEIGHT_HOSTS) {
+    if (await isCached(probe(host))) return host;
+  }
+  for (const host of WEIGHT_HOSTS) {
+    if (await reachable(probe(host))) return host;
+  }
+  return null;
+}
+
+async function init() {
+  if (location.protocol === "file:") {
+    showLoadError(`<p><strong>Open this through a website, not as a file.</strong></p><p>Browsers block the AI download when the page is opened by double-clicking it. Put it on GitHub Pages, or run <code>python3 -m http.server</code> in this folder and open <code>http://localhost:8000</code>.</p>`);
+    return;
+  }
+  const stallTimer = setInterval(() => {
+    if (Date.now() - lastProgressAt > 45000) {
+      $("load-text").textContent += " (still working, hang tight)";
+      lastProgressAt = Date.now();
+    }
+  }, 5000);
+  try {
+    $("load-text").textContent = "Getting ripe… loading engine";
+    webllm = await loadLibrary();
+    const quant = await pickQuant();
+    if (!quant) {
+      clearInterval(stallTimer);
+      showLoadError(`<p><strong>Your browser can't run Pineapple AI.</strong></p><p>Pineapple AI runs right on your device and needs WebGPU. Try the latest Chrome or Edge on a computer with a working graphics chip.</p>`);
+      return;
+    }
+    const base = MODELS[mode];
+    const modelId = `${base}-${quant}-MLC`;
+    $("load-text").textContent = "Getting ripe… finding a download server";
+    const host = await pickWeightHost(modelId);
+    if (!host) {
+      clearInterval(stallTimer);
+      showLoadError(`<p><strong>Can't reach the download server.</strong></p><p>Your network seems to block the sites the AI downloads from (Hugging Face and its mirror). Try a different network, like home Wi-Fi or a phone hotspot. After one full download, Pineapple AI works offline.</p><button class="ghost" onclick="location.reload()">Try again</button>`);
+      return;
+    }
+    const appConfig = {
+      model_list: [{
+        model: `${host}/mlc-ai/${modelId}`,
+        model_id: modelId,
+        model_lib: new URL(`lib/${base}-${quant}_cs1k-webgpu.wasm`, location.href).href,
+        overrides: { context_window_size: 4096 },
+      }],
+    };
+    setProgress(0, "cache");
+    engine = await webllm.CreateMLCEngine(modelId, {
+      appConfig,
+      initProgressCallback: (p) => setProgress(p.progress, p.text),
+    });
+    store.set(KEYS.host, host);
+    clearInterval(stallTimer);
+    $("bar-fill").style.width = "100%";
+    $("load-text").textContent = "Ready!";
+    setTimeout(openApp, 350);
+  } catch (err) {
+    clearInterval(stallTimer);
+    console.error(err);
+    try { localStorage.removeItem(KEYS.host); } catch {}
+    const msg = /fetch|network|load failed/i.test(String(err?.message || err))
+      ? (navigator.onLine
+          ? "A download was blocked or cut off. Your network may block Hugging Face, or an ad blocker may be interfering. Try another network or turn off blockers for this page."
+          : "You're offline and the AI hasn't finished downloading yet. Connect once to finish the download, then it works offline.")
+      : cleanError(err);
+    const switchBtn = mode === "smart"
+      ? `<button class="ghost" id="fallback-fast" style="margin-left:6px">Use Fast mode</button>`
+      : "";
+    showLoadError(`<p><strong>Pineapple AI couldn't start.</strong></p><p>${msg}</p><button class="ghost" onclick="location.reload()">Try again</button>${switchBtn}`);
+    const fb = $("fallback-fast");
+    if (fb) fb.onclick = () => { store.set(KEYS.mode, "fast"); location.reload(); };
+  }
+}
+
+function openApp() {
+  $("loader").classList.add("fade");
+  $("app").hidden = false;
+  setTimeout(() => $("loader").remove(), 500);
+  renderMode();
+  renderChatList();
+  $("input").focus();
+}
+
+async function searchWikipedia(query) {
+  const params = new URLSearchParams({
+    action: "query", generator: "search", gsrsearch: query, gsrlimit: "3",
+    prop: "extracts|info", exintro: "1", explaintext: "1", exlimit: "3",
+    inprop: "url", format: "json", origin: "*",
+  });
+  const res = await fetch("https://en.wikipedia.org/w/api.php?" + params);
+  if (!res.ok) throw new Error("Wikipedia request failed");
+  const data = await res.json();
+  const pages = Object.values(data?.query?.pages || {}).sort((a, b) => a.index - b.index);
+  return pages.map((p) => ({
+    title: p.title,
+    url: p.fullurl,
+    text: (p.extract || "").replace(/\s+/g, " ").trim().slice(0, 700),
+  }));
+}
+
+function stripThink(t) {
+  return t.replace(/<think>[\s\S]*?(<\/think>|$)/g, "");
+}
+
+function visibleText(t) {
+  t = stripThink(t);
+  const i = t.indexOf("<tool_call>");
+  if (i !== -1) t = t.slice(0, i);
+  return t.trim();
+}
+
+function parseToolCall(t) {
+  const m = stripThink(t).match(/<tool_call>\s*([\s\S]*?)\s*(<\/tool_call>|$)/);
+  if (!m) return null;
+  let obj = null;
+  try {
+    obj = JSON.parse(m[1]);
+  } catch {
+    const name = (m[1].match(/"name"\s*:\s*"([^"]+)"/) || [])[1];
+    const arg = m[1].match(/"(query|fact)"\s*:\s*"([^"]+)"/);
+    if (name && arg) obj = { name, arguments: { [arg[1]]: arg[2] } };
+  }
+  if (!obj || typeof obj.name !== "string") return null;
+  let args = obj.arguments || {};
+  if (typeof args === "string") { try { args = JSON.parse(args); } catch { args = {}; } }
+  return { name: obj.name, args };
+}
+
+async function generate(messages, onText) {
+  const stream = await engine.chat.completions.create({
+    messages,
+    stream: true,
+    temperature: 0.7,
+    top_p: 0.8,
+    max_tokens: 1024,
+    stop: ["</tool_call>"],
+    extra_body: { enable_thinking: false },
+  });
+  let full = "";
+  for await (const chunk of stream) {
+    full += chunk.choices?.[0]?.delta?.content || "";
+    onText(full);
+  }
+  return full;
+}
+
+function inline(s) {
+  return s
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+}
+
+function blocks(s) {
+  let html = "";
+  let list = null;
+  const close = () => { if (list) { html += `</${list}>`; list = null; } };
+  for (const line of s.split("\n")) {
+    let m;
+    if ((m = line.match(/^\s*[-*•]\s+(.*)/))) {
+      if (list !== "ul") { close(); html += "<ul>"; list = "ul"; }
+      html += `<li>${inline(m[1])}</li>`;
+    } else if ((m = line.match(/^\s*\d+[.)]\s+(.*)/))) {
+      if (list !== "ol") { close(); html += "<ol>"; list = "ol"; }
+      html += `<li>${inline(m[1])}</li>`;
+    } else if ((m = line.match(/^#{1,6}\s+(.*)/))) {
+      close();
+      html += `<h4>${inline(m[1])}</h4>`;
+    } else if (!line.trim()) {
+      close();
+    } else {
+      close();
+      html += `<p>${inline(line)}</p>`;
+    }
+  }
+  close();
+  return html;
+}
+
+function render(md) {
+  return md.split("```").map((part, i) => {
+    if (i % 2) return `<pre><code>${esc(part.replace(/^[^\n]*\n/, ""))}</code></pre>`;
+    return blocks(esc(part));
+  }).join("");
+}
+
+function scrollDown() {
+  const s = $("scroll");
+  s.scrollTop = s.scrollHeight;
+}
+
+function addMessage(role, text) {
+  $("empty").hidden = true;
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + role;
+  const body = document.createElement("div");
+  body.className = "body";
+  if (role === "user") body.textContent = text;
+  wrap.appendChild(body);
+  $("messages").appendChild(wrap);
+  scrollDown();
+  return wrap;
+}
+
+function addStatus(wrap, text, done = false) {
+  const el = document.createElement("div");
+  el.className = "status" + (done ? " done" : "");
+  el.innerHTML = `<span class="dot"></span><span>${esc(text)}</span>`;
+  wrap.insertBefore(el, wrap.querySelector(".body"));
+  scrollDown();
+  return el;
+}
+
+function addSources(wrap, sources) {
+  const seen = new Set();
+  const links = (sources || []).filter((s) => s.url && s.url.startsWith("https://") && !seen.has(s.url) && seen.add(s.url));
+  if (!links.length) return;
+  const box = document.createElement("div");
+  box.className = "sources";
+  box.innerHTML = links.map((s) => `<a href="${esc(s.url)}" target="_blank" rel="noopener">📖 ${esc(s.title)}</a>`).join("");
+  wrap.appendChild(box);
+}
+
+function setBusy(b) {
+  busy = b;
+  $("send").innerHTML = b ? STOP_ICON : SEND_ICON;
+  $("send").setAttribute("aria-label", b ? "Stop" : "Send");
+  updateSend();
+}
+
+function updateSend() {
+  $("send").disabled = !busy && !$("input").value.trim();
+}
+
+function autosize() {
+  const t = $("input");
+  t.style.height = "auto";
+  t.style.height = Math.min(t.scrollHeight, 180) + "px";
+  updateSend();
+}
+
+function saveChats() {
+  chats.sort((a, b) => b.updated - a.updated);
+  if (chats.length > MAX_CHATS) chats = chats.slice(0, MAX_CHATS);
+  store.set(KEYS.chats, chats);
+}
+
+function getChat(id) {
+  return chats.find((c) => c.id === id) || null;
+}
+
+function contextFor(chat) {
+  const turns = chat ? chat.turns : [];
+  const kept = [];
+  let size = 0;
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const len = turns[i].reduce((n, m) => n + m.content.length, 0);
+    if (kept.length && size + len > CONTEXT_CHARS) break;
+    kept.unshift(turns[i]);
+    size += len;
+  }
+  return kept.flat();
+}
+
+function renderChatList() {
+  const list = $("chat-list");
+  if (!chats.length) {
+    list.innerHTML = '<div class="no-chats">Your chats will show up here.</div>';
+    return;
+  }
+  list.innerHTML = "";
+  for (const c of chats) {
+    const item = document.createElement("div");
+    item.className = "chat-item" + (c.id === currentId ? " active" : "");
+    item.innerHTML = `<button class="open" title="${esc(c.title)}">${esc(c.title)}</button><button class="del" aria-label="Delete chat">✕</button>`;
+    item.querySelector(".open").onclick = () => openChat(c.id);
+    item.querySelector(".del").onclick = (e) => { e.stopPropagation(); deleteChat(c.id); };
+    list.appendChild(item);
+  }
+}
+
+function clearMessages() {
+  document.querySelectorAll("#messages .msg").forEach((m) => m.remove());
+}
+
+function openChat(id) {
+  if (busy) return;
+  const chat = getChat(id);
+  if (!chat) return;
+  currentId = id;
+  clearMessages();
+  $("empty").hidden = true;
+  for (const v of chat.view) {
+    if (v.role === "user") {
+      addMessage("user", v.text);
+    } else {
+      const wrap = addMessage("assistant", "");
+      wrap.querySelector(".body").innerHTML = render(v.text);
+      for (const s of v.statuses || []) addStatus(wrap, s, true);
+      addSources(wrap, v.sources);
+    }
+  }
+  renderChatList();
+  closeSidebar();
+  scrollDown();
+}
+
+function newChat() {
+  if (busy) { stopped = true; try { engine.interruptGenerate(); } catch {} }
+  currentId = null;
+  clearMessages();
+  $("empty").hidden = false;
+  renderChatList();
+  closeSidebar();
+  $("input").focus();
+}
+
+function deleteChat(id) {
+  if (busy && id === currentId) return;
+  chats = chats.filter((c) => c.id !== id);
+  saveChats();
+  if (id === currentId) newChat();
+  else renderChatList();
+}
+
+async function send(textOverride) {
+  if (busy) {
+    stopped = true;
+    try { engine.interruptGenerate(); } catch {}
+    return;
+  }
+  const text = (textOverride ?? $("input").value).trim();
+  if (!text || !engine) return;
+  $("input").value = "";
+  autosize();
+  stopped = false;
+  setBusy(true);
+
+  let chat = getChat(currentId);
+  if (!chat) {
+    chat = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+      title: text.length > 42 ? text.slice(0, 40).trim() + "…" : text,
+      updated: Date.now(),
+      view: [],
+      turns: [],
+    };
+    chats.unshift(chat);
+    currentId = chat.id;
+  }
+
+  addMessage("user", text);
+  const wrap = addMessage("assistant", "");
+  const body = wrap.querySelector(".body");
+  body.innerHTML = TYPING;
+
+  const system = { role: "system", content: systemPrompt() };
+  const history = contextFor(chat);
+  const turn = [{ role: "user", content: text }];
+  const sources = [];
+  const statuses = [];
+  let answer = "";
+
+  try {
+    for (let round = 0; ; round++) {
+      const raw = await generate([system, ...history, ...turn], (full) => {
+        const v = visibleText(full);
+        if (v) { body.innerHTML = render(v); scrollDown(); }
+      });
+      const call = !stopped && round < MAX_TOOL_ROUNDS ? parseToolCall(raw) : null;
+      if (!call) {
+        answer = visibleText(raw);
+        turn.push({ role: "assistant", content: answer || raw });
+        break;
+      }
+
+      body.innerHTML = TYPING;
+      let payload;
+      if (call.name === "remember") {
+        const fact = String(call.args.fact || "").trim().slice(0, 200);
+        if (fact && !memory.includes(fact)) {
+          memory.push(fact);
+          store.set(KEYS.memory, memory);
+        }
+        const label = fact ? `Saved to memory: ${fact}` : "Tried to save a memory";
+        addStatus(wrap, label, true);
+        statuses.push(label);
+        payload = fact ? "Saved." : "Nothing to save.";
+      } else if (call.name === "search_wikipedia") {
+        const query = String(call.args.query || text).trim().slice(0, 120);
+        const status = addStatus(wrap, `Searching Wikipedia for “${query}”`);
+        try {
+          const results = await searchWikipedia(query);
+          sources.push(...results);
+          payload = results.length
+            ? results.map((r, i) => `[${i + 1}] ${r.title}\n${r.text}`).join("\n\n")
+            : "No Wikipedia results found.";
+        } catch {
+          payload = navigator.onLine
+            ? "The search failed. Answer from what you know and say you couldn't look it up."
+            : "You are offline, so search is unavailable. Answer from what you know and mention you couldn't look it up.";
+        }
+        const label = `Searched Wikipedia for “${query}”`;
+        status.classList.add("done");
+        status.lastElementChild.textContent = label;
+        statuses.push(label);
+      } else {
+        payload = "Unknown tool. Answer the user directly.";
+      }
+      if (round === MAX_TOOL_ROUNDS - 1) payload += "\n\nNow answer the user. Do not use any more tools.";
+
+      turn.push({ role: "assistant", content: raw });
+      turn.push({ role: "user", content: `<tool_response>\n${payload}\n</tool_response>` });
+      if (stopped) break;
+    }
+  } catch (err) {
+    console.error(err);
+    if (!answer) answer = "Sorry, something went wrong. Please try again.";
+  }
+
+  if (!answer) answer = stopped ? "*Stopped.*" : "Sorry, I couldn't come up with an answer. Try asking another way.";
+  body.innerHTML = render(answer);
+  addSources(wrap, sources);
+  scrollDown();
+
+  if (turn[turn.length - 1].role !== "assistant") turn.push({ role: "assistant", content: answer });
+  chat.turns.push(turn);
+  chat.view.push({ role: "user", text }, { role: "assistant", text: answer, sources, statuses });
+  chat.updated = Date.now();
+  saveChats();
+  renderChatList();
+
+  setBusy(false);
+  $("input").focus();
+}
+
+function renderMode() {
+  document.querySelectorAll("#mode-seg button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+  $("mode-hint").textContent = MODE_HINTS[mode];
+}
+
+function switchMode(next) {
+  if (next === mode || busy) return;
+  store.set(KEYS.mode, next);
+  location.reload();
+}
+
+function renderMemory() {
+  const list = $("memory-list");
+  if (!memory.length) {
+    list.innerHTML = '<li class="mem-empty" style="border:0;padding:0">Nothing yet. Tell Pineapple AI something about yourself, or say “remember that…”.</li>';
+    return;
+  }
+  list.innerHTML = "";
+  memory.forEach((m, i) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<span>${esc(m)}</span><button class="del" aria-label="Forget">✕</button>`;
+    li.querySelector(".del").onclick = () => {
+      memory.splice(i, 1);
+      store.set(KEYS.memory, memory);
+      renderMemory();
+    };
+    list.appendChild(li);
+  });
+}
+
+function openSidebar() { $("sidebar").classList.add("open"); $("backdrop").classList.add("show"); }
+function closeSidebar() { $("sidebar").classList.remove("open"); $("backdrop").classList.remove("show"); }
+
+$("send").innerHTML = SEND_ICON;
+$("send").addEventListener("click", () => send());
+$("input").addEventListener("input", autosize);
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    if (!busy) send();
+  }
+});
+$("new-chat").addEventListener("click", newChat);
+$("menu").addEventListener("click", openSidebar);
+$("backdrop").addEventListener("click", closeSidebar);
+document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => send(c.textContent)));
+document.querySelectorAll("#mode-seg button").forEach((b) => b.addEventListener("click", () => switchMode(b.dataset.mode)));
+$("open-memory").addEventListener("click", () => { renderMemory(); $("memory-dialog").showModal(); closeSidebar(); });
+$("close-memory").addEventListener("click", () => $("memory-dialog").close());
+$("clear-memory").addEventListener("click", () => { memory = []; store.set(KEYS.memory, memory); renderMemory(); });
+$("clear-chats").addEventListener("click", () => {
+  if (busy) return;
+  chats = [];
+  saveChats();
+  newChat();
+  $("memory-dialog").close();
+});
+updateSend();
+
+if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  navigator.serviceWorker.register("sw.js").catch((e) => console.warn("Offline mode unavailable", e));
+}
+
+init();
+</script>
+</body>
+</html>
