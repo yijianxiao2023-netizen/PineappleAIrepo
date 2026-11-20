@@ -1,8 +1,10 @@
-const CACHE = "pineapple-shell-v2";
+const CACHE = "pineapple-shell-v3";
 const SHELL = [
   "./",
   "./index.html",
   "./lib/web-llm.js",
+  "./lib/supabase.js",
+  "./config.js",
   "./lib/Qwen3-4B-q4f16_1_cs1k-webgpu.wasm",
   "./lib/Qwen3-4B-q4f32_1_cs1k-webgpu.wasm",
   "./lib/Qwen3-1.7B-q4f16_1_cs1k-webgpu.wasm",
@@ -31,7 +33,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  const isPage = req.mode === "navigate" || url.pathname.endsWith("/") || url.pathname.endsWith(".html");
+  const isPage = req.mode === "navigate" || url.pathname.endsWith("/") || url.pathname.endsWith(".html") || url.pathname.endsWith("/config.js");
   if (isPage) {
     event.respondWith(
       fetch(req)

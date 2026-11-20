@@ -14,6 +14,17 @@ Needs a browser with WebGPU (latest Chrome or Edge).
 
   > Pineapple AI by **SlaxY1r** ([yijianxiao2023-netizen](https://github.com/yijianxiao2023-netizen))
 
+## Accounts (optional)
+
+Pineapple AI works without accounts. To let people sign in with Google or GitHub and sync their chats and memory across devices, set up a free [Supabase](https://supabase.com) project:
+
+1. **Create a project** at supabase.com.
+2. **Create the tables:** open **SQL Editor → New query**, paste everything in [`supabase-setup.sql`](supabase-setup.sql), and click **Run**.
+3. **Set the website address:** go to **Authentication → URL Configuration**. Set **Site URL** to `https://yijianxiao2023-netizen.github.io/PineappleAIrepo/` and add the same address under **Redirect URLs**.
+4. **Turn on GitHub sign-in:** go to **Authentication → Sign In / Providers → GitHub** and copy the **Callback URL** shown there. On GitHub, go to **Settings → Developer settings → OAuth Apps → New OAuth App**. Use the site address above as the homepage URL and paste the callback URL. Copy the app's **Client ID** and a new **Client secret** back into Supabase, turn GitHub on, and save.
+5. **Turn on Google sign-in:** go to **Authentication → Sign In / Providers → Google**. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an **OAuth client ID** (type: Web application) and add the Supabase callback URL under **Authorized redirect URIs**. Paste the Client ID and secret into Supabase, turn Google on, and save.
+6. **Connect the site:** go to **Project Settings → API** and copy the **Project URL** and the **anon public** key into [`config.js`](config.js). The anon key is safe to make public: the database rules from step 2 only let each person read and change their own data. **Never** put the `service_role` key in this repo.
+
 ## Credits
 
 - Created by **SlaxY1r** ([yijianxiao2023-netizen](https://github.com/yijianxiao2023-netizen))

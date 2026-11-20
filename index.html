@@ -225,6 +225,35 @@
   }
   .ghost:hover { border-color: var(--gold); }
   .ghost.danger:hover { border-color: #d9534f; color: #d9534f; }
+
+  .account { display: flex; align-items: center; gap: 10px; padding: 4px 6px; }
+  .account img, .account .avatar {
+    width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; object-fit: cover;
+    background: var(--gold); color: #2b2a26; display: grid; place-items: center; font-weight: 700; font-size: 14px;
+  }
+  .account .who { flex: 1; min-width: 0; }
+  .account .name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .account .sync { font-size: 12px; color: var(--muted); }
+  .account .out { border: 0; background: none; color: var(--muted); font-size: 12.5px; cursor: pointer; padding: 4px 6px; border-radius: 8px; }
+  .account .out:hover { background: var(--hover); color: var(--ink); }
+  .signin-btn {
+    width: 100%; border: 1px solid var(--gold); background: color-mix(in srgb, var(--gold) 14%, var(--panel));
+    padding: 9px 12px; border-radius: 12px; cursor: pointer; font-size: 14px; font-weight: 600;
+  }
+  .signin-btn:hover { background: color-mix(in srgb, var(--gold) 26%, var(--panel)); }
+  .auth-btns { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 8px; }
+  .auth-btn {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    border: 1px solid var(--line); background: var(--panel); padding: 12px 14px; border-radius: 12px;
+    font-size: 15px; font-weight: 600; cursor: pointer;
+  }
+  .auth-btn:hover { border-color: var(--gold); }
+  .auth-btn:disabled { opacity: .5; cursor: default; }
+  .auth-note { font-size: 13px !important; min-height: 1em; }
+  .auth-note.err { color: #d9534f !important; }
+  .auth-head { text-align: center; padding: 22px 18px 4px; }
+  .auth-head svg { width: 44px; height: 55px; }
+  .auth-head h2 { margin: 8px 0 0; font-size: 20px; }
 </style>
 </head>
 <body>
@@ -270,6 +299,7 @@
     <div class="list-label">Chats</div>
     <div id="chat-list"></div>
     <div class="side-bottom">
+      <div id="account" hidden></div>
       <button class="side-link" id="open-memory">🧠 Memory</button>
       <div class="seg" id="mode-seg">
         <button data-mode="fast">⚡ Fast</button>
@@ -327,6 +357,24 @@
   </div>
 </dialog>
 
+<dialog id="auth-dialog">
+  <div class="auth-head">
+    <svg><use href="#pine"/></svg>
+    <h2>Sign in to Pineapple AI</h2>
+  </div>
+  <div class="dlg-body">
+    <p style="text-align:center">Save your chats and memory to your account and pick up where you left off on any device.</p>
+    <div class="auth-btns">
+      <button class="auth-btn" data-provider="google">Continue with Google</button>
+      <button class="auth-btn" data-provider="github">Continue with GitHub</button>
+    </div>
+    <p class="auth-note" id="auth-note"></p>
+  </div>
+  <div class="dlg-foot" style="justify-content:center">
+    <button class="ghost" id="auth-guest">Continue as guest</button>
+  </div>
+</dialog>
+
 <script type="module">
 const WEBLLM_URLS = [
   "./lib/web-llm.js",
@@ -344,6 +392,7 @@ const KEYS = {
   memory: "pineapple-memory",
   mode: "pineapple-mode",
   host: "pineapple-weight-host",
+  authDismissed: "pineapple-auth-dismissed",
 };
 const MAX_TOOL_ROUNDS = 3;
 const MAX_CHATS = 60;
@@ -364,8 +413,22 @@ let busy = false;
 let stopped = false;
 let shownProgress = 0;
 let lastProgressAt = Date.now();
-let chats = store.get(KEYS.chats, []);
-let memory = store.get(KEYS.memory, []);
+let sb = null;
+let user = null;
+let appOpen = false;
+let syncState = "";
+let syncing = null;
+let chats = [];
+let memory = [];
+let memoryUpdated = 0;
+const scoped = (k) => (user ? `${k}:${user.id}` : k);
+
+function loadLocal() {
+  chats = store.get(scoped(KEYS.chats), []);
+  memory = store.get(scoped(KEYS.memory), []);
+  memoryUpdated = store.get(scoped("pineapple-memory-updated"), 0);
+}
+loadLocal();
 let mode = store.get(KEYS.mode, "fast") === "smart" ? "smart" : "fast";
 let currentId = null;
 
@@ -537,9 +600,12 @@ function openApp() {
   $("loader").classList.add("fade");
   $("app").hidden = false;
   setTimeout(() => $("loader").remove(), 500);
+  appOpen = true;
   renderMode();
   renderChatList();
+  renderAccount();
   $("input").focus();
+  authReady.then(maybePromptAuth);
 }
 
 async function searchWikipedia(query) {
@@ -703,7 +769,18 @@ function autosize() {
 function saveChats() {
   chats.sort((a, b) => b.updated - a.updated);
   if (chats.length > MAX_CHATS) chats = chats.slice(0, MAX_CHATS);
-  store.set(KEYS.chats, chats);
+  store.set(scoped(KEYS.chats), chats);
+}
+
+function saveMemoryLocal() {
+  store.set(scoped(KEYS.memory), memory);
+  store.set(scoped("pineapple-memory-updated"), memoryUpdated);
+}
+
+function saveMemory() {
+  memoryUpdated = Date.now();
+  saveMemoryLocal();
+  pushMemory();
 }
 
 function getChat(id) {
@@ -780,6 +857,7 @@ function deleteChat(id) {
   if (busy && id === currentId) return;
   chats = chats.filter((c) => c.id !== id);
   saveChats();
+  removeRemoteChat(id);
   if (id === currentId) newChat();
   else renderChatList();
 }
@@ -841,7 +919,7 @@ async function send(textOverride) {
         const fact = String(call.args.fact || "").trim().slice(0, 200);
         if (fact && !memory.includes(fact)) {
           memory.push(fact);
-          store.set(KEYS.memory, memory);
+          saveMemory();
         }
         const label = fact ? `Saved to memory: ${fact}` : "Tried to save a memory";
         addStatus(wrap, label, true);
@@ -890,6 +968,7 @@ async function send(textOverride) {
   chat.updated = Date.now();
   saveChats();
   renderChatList();
+  pushChat(chat);
 
   setBusy(false);
   $("input").focus();
@@ -918,7 +997,7 @@ function renderMemory() {
     li.innerHTML = `<span>${esc(m)}</span><button class="del" aria-label="Forget">✕</button>`;
     li.querySelector(".del").onclick = () => {
       memory.splice(i, 1);
-      store.set(KEYS.memory, memory);
+      saveMemory();
       renderMemory();
     };
     list.appendChild(li);
@@ -944,11 +1023,12 @@ document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", ()
 document.querySelectorAll("#mode-seg button").forEach((b) => b.addEventListener("click", () => switchMode(b.dataset.mode)));
 $("open-memory").addEventListener("click", () => { renderMemory(); $("memory-dialog").showModal(); closeSidebar(); });
 $("close-memory").addEventListener("click", () => $("memory-dialog").close());
-$("clear-memory").addEventListener("click", () => { memory = []; store.set(KEYS.memory, memory); renderMemory(); });
+$("clear-memory").addEventListener("click", () => { memory = []; saveMemory(); renderMemory(); });
 $("clear-chats").addEventListener("click", () => {
   if (busy) return;
   chats = [];
   saveChats();
+  if (sb && user) sb.from("chats").delete().eq("user_id", user.id).then(({ error }) => error && console.warn(error));
   newChat();
   $("memory-dialog").close();
 });
@@ -957,6 +1037,255 @@ updateSend();
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
   navigator.serviceWorker.register("sw.js").catch((e) => console.warn("Offline mode unavailable", e));
 }
+
+function readAuthError() {
+  const params = new URLSearchParams(location.search);
+  const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const err = params.get("error_description") || hash.get("error_description") || params.get("error") || hash.get("error");
+  return err ? err.replace(/\+/g, " ") : null;
+}
+
+function cleanUrl() {
+  if (location.search || location.hash) history.replaceState(null, "", location.pathname);
+}
+
+async function setupAuth() {
+  let cfg;
+  try { cfg = await import("./config.js"); } catch { return null; }
+  if (!cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) return null;
+  try {
+    const mod = await import("./lib/supabase.js");
+    sb = mod.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "pkce" },
+    });
+  } catch (e) {
+    console.warn("Accounts unavailable", e);
+    sb = null;
+    return null;
+  }
+  const urlError = readAuthError();
+  let session = null;
+  try { session = (await sb.auth.getSession()).data?.session || null; } catch (e) { console.warn(e); }
+  cleanUrl();
+  await setUser(session?.user || null);
+  sb.auth.onAuthStateChange((_event, s) => {
+    const next = s?.user || null;
+    if ((next?.id || null) !== (user?.id || null)) setTimeout(() => setUser(next), 0);
+  });
+  if (appOpen) renderAccount();
+  return urlError;
+}
+
+async function setUser(next) {
+  const guestChats = store.get(KEYS.chats, []);
+  const guestMemory = store.get(KEYS.memory, []);
+  user = next;
+  loadLocal();
+  if (user && (guestChats.length || guestMemory.length)) {
+    const ids = new Set(chats.map((c) => c.id));
+    chats.push(...guestChats.filter((c) => !ids.has(c.id)).map((c) => ({ ...c, synced: false })));
+    if (guestMemory.length) {
+      memory = [...new Set([...memory, ...guestMemory])];
+      memoryUpdated = Date.now();
+    }
+    store.set(KEYS.chats, []);
+    store.set(KEYS.memory, []);
+    saveChats();
+    saveMemoryLocal();
+  }
+  if (appOpen && !busy) {
+    if (!getChat(currentId)) newChat();
+    renderChatList();
+  }
+  if (appOpen) renderAccount();
+  if (user) syncAll();
+}
+
+function setSync(text) {
+  syncState = text;
+  const el = $("sync-state");
+  if (el) el.textContent = text;
+}
+
+function syncFailed(e) {
+  console.warn("Sync failed", e);
+  setSync(navigator.onLine ? "Couldn't sync" : "Offline");
+}
+
+async function syncAll() {
+  if (!sb || !user) return;
+  if (syncing) return syncing;
+  syncing = (async () => {
+    const uid = user.id;
+    setSync("Syncing…");
+    try {
+      const [chatRes, memRes] = await Promise.all([
+        sb.from("chats").select("id,title,updated,data"),
+        sb.from("memories").select("items,updated").eq("user_id", uid).maybeSingle(),
+      ]);
+      if (chatRes.error) throw chatRes.error;
+      if (memRes.error) throw memRes.error;
+      if (!user || user.id !== uid) return;
+
+      const remote = new Map(chatRes.data.map((r) => [r.id, {
+        id: r.id, title: r.title, updated: Number(r.updated),
+        view: r.data?.view || [], turns: r.data?.turns || [], synced: true,
+      }]));
+      const merged = new Map(remote);
+      const upload = [];
+      for (const c of chats) {
+        const r = remote.get(c.id);
+        if (!r) {
+          if (!c.synced) { merged.set(c.id, c); upload.push(c); }
+        } else if (c.updated > r.updated) {
+          merged.set(c.id, c);
+          upload.push(c);
+        }
+      }
+      chats = [...merged.values()];
+      saveChats();
+
+      const remoteItems = Array.isArray(memRes.data?.items) ? memRes.data.items : [];
+      const remoteUpdated = Number(memRes.data?.updated || 0);
+      const firstKey = `pineapple-memory-synced:${uid}`;
+      let pushMem = false;
+      if (!store.get(firstKey, false)) {
+        const union = [...new Set([...remoteItems, ...memory])];
+        pushMem = union.length !== remoteItems.length;
+        memory = union;
+        memoryUpdated = Math.max(memoryUpdated, remoteUpdated, pushMem ? Date.now() : 0);
+      } else if (memoryUpdated > remoteUpdated) {
+        pushMem = true;
+      } else if (memRes.data) {
+        memory = remoteItems;
+        memoryUpdated = remoteUpdated;
+      }
+      saveMemoryLocal();
+      store.set(firstKey, true);
+
+      for (const c of upload) await pushChat(c);
+      if (pushMem) await pushMemory();
+      setSync("Synced");
+      if (appOpen && !busy) {
+        if (currentId && !getChat(currentId)) newChat();
+        renderChatList();
+      }
+    } catch (e) {
+      syncFailed(e);
+    } finally {
+      syncing = null;
+    }
+  })();
+  return syncing;
+}
+
+async function pushChat(c) {
+  if (!sb || !user) return;
+  try {
+    const { error } = await sb.from("chats").upsert({
+      user_id: user.id, id: c.id, title: c.title, updated: c.updated,
+      data: { view: c.view, turns: c.turns },
+    }, { onConflict: "user_id,id" });
+    if (error) throw error;
+    c.synced = true;
+    saveChats();
+    setSync("Synced");
+  } catch (e) {
+    syncFailed(e);
+  }
+}
+
+async function pushMemory() {
+  if (!sb || !user) return;
+  try {
+    const { error } = await sb.from("memories").upsert(
+      { user_id: user.id, items: memory, updated: memoryUpdated },
+      { onConflict: "user_id" },
+    );
+    if (error) throw error;
+    setSync("Synced");
+  } catch (e) {
+    syncFailed(e);
+  }
+}
+
+async function removeRemoteChat(id) {
+  if (!sb || !user) return;
+  try {
+    const { error } = await sb.from("chats").delete().eq("user_id", user.id).eq("id", id);
+    if (error) throw error;
+  } catch (e) {
+    syncFailed(e);
+  }
+}
+
+function renderAccount() {
+  const box = $("account");
+  if (!sb) { box.hidden = true; return; }
+  box.hidden = false;
+  if (!user) {
+    box.innerHTML = '<button class="signin-btn" id="signin-open">Sign in to sync your chats</button>';
+    $("signin-open").onclick = () => openAuth();
+    return;
+  }
+  const meta = user.user_metadata || {};
+  const name = String(meta.full_name || meta.name || meta.user_name || user.email || "Signed in");
+  const pic = String(meta.avatar_url || meta.picture || "");
+  const avatar = /^https:\/\//.test(pic)
+    ? `<img src="${esc(pic)}" alt="" referrerpolicy="no-referrer">`
+    : `<div class="avatar">${esc(name.charAt(0).toUpperCase())}</div>`;
+  box.innerHTML = `<div class="account">${avatar}<div class="who"><div class="name">${esc(name)}</div><div class="sync" id="sync-state">${esc(syncState)}</div></div><button class="out" id="signout">Sign out</button></div>`;
+  $("signout").onclick = signOut;
+}
+
+function openAuth(note, isError = false) {
+  const el = $("auth-note");
+  el.textContent = note || (chats.length ? "Your chats on this device will move into your account." : "");
+  el.classList.toggle("err", isError);
+  document.querySelectorAll(".auth-btn").forEach((b) => (b.disabled = false));
+  closeSidebar();
+  if (!$("auth-dialog").open) $("auth-dialog").showModal();
+}
+
+function maybePromptAuth(urlError) {
+  if (!sb) return;
+  if (urlError) openAuth(`Sign-in didn't work: ${urlError}`, true);
+  else if (!user && !store.get(KEYS.authDismissed, false)) openAuth();
+}
+
+async function signIn(provider) {
+  if (!sb) return;
+  if (!navigator.onLine) { openAuth("You're offline. Connect to the internet to sign in.", true); return; }
+  document.querySelectorAll(".auth-btn").forEach((b) => (b.disabled = true));
+  $("auth-note").classList.remove("err");
+  $("auth-note").textContent = "Opening sign-in…";
+  const { error } = await sb.auth.signInWithOAuth({
+    provider,
+    options: { redirectTo: location.origin + location.pathname },
+  });
+  if (error) openAuth(`Sign-in didn't work: ${error.message}`, true);
+}
+
+async function signOut() {
+  if (busy || !sb) return;
+  const uid = user?.id;
+  try { await sb.auth.signOut(); } catch (e) { console.warn(e); }
+  if (uid) {
+    for (const k of [`${KEYS.chats}:${uid}`, `${KEYS.memory}:${uid}`, `pineapple-memory-updated:${uid}`, `pineapple-memory-synced:${uid}`]) {
+      try { localStorage.removeItem(k); } catch {}
+    }
+  }
+  syncState = "";
+  store.set(KEYS.authDismissed, true);
+  await setUser(null);
+  newChat();
+}
+
+document.querySelectorAll(".auth-btn").forEach((b) => b.addEventListener("click", () => signIn(b.dataset.provider)));
+$("auth-guest").addEventListener("click", () => { store.set(KEYS.authDismissed, true); $("auth-dialog").close(); });
+$("auth-dialog").addEventListener("cancel", () => store.set(KEYS.authDismissed, true));
+
+const authReady = setupAuth().catch((e) => { console.warn(e); return null; });
 
 init();
 </script>
