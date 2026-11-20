@@ -396,9 +396,62 @@ const KEYS = {
 };
 const MAX_TOOL_ROUNDS = 3;
 const MAX_CHATS = 60;
-const CONTEXT_WINDOW = 8192;
-const CONTEXT_CHARS = 12000;
-const MAX_MESSAGE_CHARS = 10000;
+const CONTEXT_TIERS = [32768, 16384, 8192, 4096];
+const KV_MB_PER_TOKEN = { "Qwen3-1.7B": 0.11, "Qwen3-4B": 0.15 };
+const WEIGHTS_GB = { "Qwen3-1.7B": 1.2, "Qwen3-4B": 2.6 };
+let CONTEXT_WINDOW = 8192;
+let CONTEXT_CHARS = 12000;
+let MAX_MESSAGE_CHARS = 10000;
+let gpuAdapter = null;
+let currentModelId = "";
+
+function applyContextWindow(tokens) {
+  CONTEXT_WINDOW = tokens;
+  CONTEXT_CHARS = Math.max(4000, Math.floor((tokens - 3500) * 3));
+  MAX_MESSAGE_CHARS = Math.floor(CONTEXT_CHARS * 0.8);
+}
+applyContextWindow(8192);
+
+function ctxKey(modelId) {
+  return `pineapple-ctx:${modelId}`;
+}
+
+function formatTokens(n) {
+  return `${Math.round(n / 1024)}K`;
+}
+
+async function estimateMemoryGB() {
+  const ram = typeof navigator.deviceMemory === "number" ? navigator.deviceMemory : null;
+  let maxBuffer = 0;
+  let vendor = "";
+  let arch = "";
+  try {
+    maxBuffer = Number(gpuAdapter?.limits?.maxBufferSize || 0) / 1024 ** 3;
+    const info = gpuAdapter?.info || (gpuAdapter?.requestAdapterInfo ? await gpuAdapter.requestAdapterInfo() : null);
+    vendor = String(info?.vendor || "").toLowerCase();
+    arch = String(info?.architecture || "").toLowerCase();
+  } catch {}
+  const unified = vendor.includes("apple") || /metal|apple/.test(arch);
+  let budget;
+  if (ram === null) budget = unified ? 6 : 4;
+  else if (ram >= 8) budget = unified ? 7 : 6;
+  else if (ram >= 4) budget = 3;
+  else budget = 1.5;
+  if (maxBuffer && maxBuffer < 1) budget = Math.min(budget, 2);
+  console.info("Pineapple AI device check", { ram, maxBufferGB: maxBuffer.toFixed(2), vendor, arch, unified, budgetGB: budget });
+  return budget;
+}
+
+async function pickContextTiers(base, quant, modelId) {
+  const saved = Number(store.get(ctxKey(modelId), 0));
+  if (CONTEXT_TIERS.includes(saved)) return CONTEXT_TIERS.filter((t) => t <= saved);
+  const budgetGB = await estimateMemoryGB();
+  const kvPerTokenGB = (KV_MB_PER_TOKEN[base] * (quant === "q4f32_1" ? 2 : 1)) / 1024;
+  const spare = budgetGB - WEIGHTS_GB[base] * (quant === "q4f32_1" ? 1.15 : 1) - 0.6;
+  const fits = CONTEXT_TIERS.filter((t) => t * kvPerTokenGB <= spare);
+  const start = fits.length ? fits[0] : 4096;
+  return CONTEXT_TIERS.filter((t) => t <= start);
+}
 const SEND_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
 const STOP_ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
 const TYPING = '<span class="typing"><i></i><i></i><i></i></span>';
@@ -494,6 +547,7 @@ async function pickQuant() {
   if (!navigator.gpu) return null;
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) return null;
+  gpuAdapter = adapter;
   return adapter.features.has("shader-f16") ? "q4f16_1" : "q4f32_1";
 }
 
@@ -563,19 +617,37 @@ async function init() {
       showLoadError(`<p><strong>Can't reach the download server.</strong></p><p>Your network seems to block the sites the AI downloads from (Hugging Face and its mirror). Try a different network, like home Wi-Fi or a phone hotspot. After one full download, Pineapple AI works offline.</p><button class="ghost" onclick="location.reload()">Try again</button>`);
       return;
     }
-    const appConfig = {
-      model_list: [{
-        model: `${host}/mlc-ai/${modelId}`,
-        model_id: modelId,
-        model_lib: new URL(`lib/${base}-${quant}_cs1k-webgpu.wasm`, location.href).href,
-        overrides: { context_window_size: CONTEXT_WINDOW },
-      }],
-    };
-    setProgress(0, "cache");
-    engine = await webllm.CreateMLCEngine(modelId, {
-      appConfig,
-      initProgressCallback: (p) => setProgress(p.progress, p.text),
-    });
+    const tiers = await pickContextTiers(base, quant, modelId);
+    let lastErr = null;
+    for (const tokens of tiers) {
+      const appConfig = {
+        model_list: [{
+          model: `${host}/mlc-ai/${modelId}`,
+          model_id: modelId,
+          model_lib: new URL(`lib/${base}-${quant}_cs1k-webgpu.wasm`, location.href).href,
+          overrides: { context_window_size: tokens },
+        }],
+      };
+      setProgress(0, "cache");
+      try {
+        engine = await webllm.CreateMLCEngine(modelId, {
+          appConfig,
+          initProgressCallback: (p) => setProgress(p.progress, p.text),
+        });
+        applyContextWindow(tokens);
+        currentModelId = modelId;
+        store.set(ctxKey(modelId), tokens);
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+        console.warn(`Couldn't load with ${tokens} context`, e);
+        if (/fetch|network|load failed/i.test(String(e?.message || e))) break;
+        $("load-text").textContent = "Adjusting for your device…";
+        shownProgress = 0;
+      }
+    }
+    if (lastErr || !engine) throw lastErr || new Error("Couldn't start the AI on this device.");
     store.set(KEYS.host, host);
     clearInterval(stallTimer);
     $("bar-fill").style.width = "100%";
@@ -819,7 +891,7 @@ async function summarizeOldTurns(chat) {
     const user = t[0].content;
     const reply = t[t.length - 1].role === "assistant" ? t[t.length - 1].content : "";
     return `User: ${user}\nAssistant: ${reply}`;
-  }).join("\n\n").slice(0, 16000);
+  }).join("\n\n").slice(0, CONTEXT_CHARS);
   const res = await engine.chat.completions.create({
     messages: [
       { role: "system", content: "You write short, accurate summaries of conversations." },
@@ -1015,6 +1087,14 @@ async function send(textOverride) {
     }
   } catch (err) {
     console.error(err);
+    if (/device (was )?lost|out of memory|outofmemory|\boom\b|allocat/i.test(String(err?.message || err))) {
+      const smaller = CONTEXT_TIERS.find((t) => t < CONTEXT_WINDOW);
+      if (smaller && currentModelId) {
+        store.set(ctxKey(currentModelId), smaller);
+        answer = `I ran out of graphics memory on this device, so I'm restarting with a smaller memory (${formatTokens(smaller)} tokens). Your chat is saved.`;
+        setTimeout(() => location.reload(), 2500);
+      }
+    }
     if (!answer) answer = "Sorry, something went wrong. Please try again.";
   }
 
@@ -1037,7 +1117,7 @@ async function send(textOverride) {
 
 function renderMode() {
   document.querySelectorAll("#mode-seg button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
-  $("mode-hint").textContent = MODE_HINTS[mode];
+  $("mode-hint").textContent = `${MODE_HINTS[mode]} Context: ${formatTokens(CONTEXT_WINDOW)} tokens (auto).`;
 }
 
 function switchMode(next) {
