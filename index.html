@@ -363,15 +363,12 @@
     <h2>Sign in to Pineapple AI</h2>
   </div>
   <div class="dlg-body">
-    <p style="text-align:center">Save your chats and memory to your account and pick up where you left off on any device.</p>
+    <p style="text-align:center">Sign in to start chatting. Your chats and memory are saved to your account and sync across your devices.</p>
     <div class="auth-btns">
       <button class="auth-btn" data-provider="google">Continue with Google</button>
       <button class="auth-btn" data-provider="github">Continue with GitHub</button>
     </div>
     <p class="auth-note" id="auth-note"></p>
-  </div>
-  <div class="dlg-foot" style="justify-content:center">
-    <button class="ghost" id="auth-guest">Continue as guest</button>
   </div>
 </dialog>
 
@@ -392,7 +389,6 @@ const KEYS = {
   memory: "pineapple-memory",
   mode: "pineapple-mode",
   host: "pineapple-weight-host",
-  authDismissed: "pineapple-auth-dismissed",
 };
 const MAX_TOOL_ROUNDS = 3;
 const MAX_CHATS = 60;
@@ -605,7 +601,7 @@ function openApp() {
   renderChatList();
   renderAccount();
   $("input").focus();
-  authReady.then(maybePromptAuth);
+  authReady.then(requireSignIn);
 }
 
 async function searchWikipedia(query) {
@@ -870,6 +866,7 @@ async function send(textOverride) {
   }
   const text = (textOverride ?? $("input").value).trim();
   if (!text || !engine) return;
+  if (!user) { requireSignIn(); return; }
   $("input").value = "";
   autosize();
   stopped = false;
@@ -1098,7 +1095,12 @@ async function setUser(next) {
     renderChatList();
   }
   if (appOpen) renderAccount();
-  if (user) syncAll();
+  if (user) {
+    if ($("auth-dialog").open) $("auth-dialog").close();
+    syncAll();
+  } else if (appOpen) {
+    requireSignIn();
+  }
 }
 
 function setSync(text) {
@@ -1224,7 +1226,7 @@ function renderAccount() {
   if (!sb) { box.hidden = true; return; }
   box.hidden = false;
   if (!user) {
-    box.innerHTML = '<button class="signin-btn" id="signin-open">Sign in to sync your chats</button>';
+    box.innerHTML = '<button class="signin-btn" id="signin-open">Sign in</button>';
     $("signin-open").onclick = () => openAuth();
     return;
   }
@@ -1240,17 +1242,22 @@ function renderAccount() {
 
 function openAuth(note, isError = false) {
   const el = $("auth-note");
-  el.textContent = note || (chats.length ? "Your chats on this device will move into your account." : "");
+  el.textContent = note || "";
   el.classList.toggle("err", isError);
   document.querySelectorAll(".auth-btn").forEach((b) => (b.disabled = false));
   closeSidebar();
   if (!$("auth-dialog").open) $("auth-dialog").showModal();
 }
 
-function maybePromptAuth(urlError) {
-  if (!sb) return;
+function requireSignIn(urlError) {
+  if (user) return;
+  if (!sb) {
+    openAuth("Sign-in isn't set up on this site yet, so Pineapple AI can't be used right now.", true);
+    document.querySelectorAll(".auth-btn").forEach((b) => (b.disabled = true));
+    return;
+  }
   if (urlError) openAuth(`Sign-in didn't work: ${urlError}`, true);
-  else if (!user && !store.get(KEYS.authDismissed, false)) openAuth();
+  else openAuth();
 }
 
 async function signIn(provider) {
@@ -1276,14 +1283,13 @@ async function signOut() {
     }
   }
   syncState = "";
-  store.set(KEYS.authDismissed, true);
   await setUser(null);
   newChat();
 }
 
 document.querySelectorAll(".auth-btn").forEach((b) => b.addEventListener("click", () => signIn(b.dataset.provider)));
-$("auth-guest").addEventListener("click", () => { store.set(KEYS.authDismissed, true); $("auth-dialog").close(); });
-$("auth-dialog").addEventListener("cancel", () => store.set(KEYS.authDismissed, true));
+$("auth-dialog").addEventListener("cancel", (e) => { if (!user) e.preventDefault(); });
+$("auth-dialog").addEventListener("close", () => { if (!user && appOpen) setTimeout(() => requireSignIn(), 0); });
 
 const authReady = setupAuth().catch((e) => { console.warn(e); return null; });
 

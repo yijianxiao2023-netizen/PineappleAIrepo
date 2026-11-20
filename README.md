@@ -14,9 +14,9 @@ Needs a browser with WebGPU (latest Chrome or Edge).
 
   > Pineapple AI by **SlaxY1r** ([yijianxiao2023-netizen](https://github.com/yijianxiao2023-netizen))
 
-## Accounts (optional)
+## Accounts (required)
 
-Pineapple AI works without accounts. To let people sign in with Google or GitHub and sync their chats and memory across devices, set up a free [Supabase](https://supabase.com) project:
+Everyone must sign in with Google or GitHub to use Pineapple AI. Their chats and memory sync across devices. **The site can't be used until this is set up**, so create a free [Supabase](https://supabase.com) project:
 
 1. **Create a project** at supabase.com.
 2. **Create the tables:** open **SQL Editor → New query**, paste everything in [`supabase-setup.sql`](supabase-setup.sql), and click **Run**.
