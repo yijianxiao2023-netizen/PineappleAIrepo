@@ -66,3 +66,27 @@ $$;
 
 revoke all on function public.bump_web_usage(uuid, text, int) from public, anon, authenticated;
 grant execute on function public.bump_web_usage(uuid, text, int) to service_role;
+
+-- Account limit: block new sign-ups once Pineapple AI has 25 accounts.
+-- Existing users can always sign in. To change the limit, edit max_accounts below and run this again.
+create or replace function public.enforce_account_limit()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+declare
+  max_accounts constant int := 25;
+begin
+  perform pg_advisory_xact_lock(724001);
+  if (select count(*) from auth.users) >= max_accounts then
+    raise exception 'PINEAPPLE_FULL: Pineapple AI has reached its limit of % accounts.', max_accounts;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists pineapple_account_limit on auth.users;
+create trigger pineapple_account_limit
+  before insert on auth.users
+  for each row execute function public.enforce_account_limit();

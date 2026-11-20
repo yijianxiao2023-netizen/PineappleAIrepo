@@ -25,6 +25,10 @@ Everyone must sign in with Google or GitHub to use Pineapple AI. Their chats and
 5. **Turn on Google sign-in:** go to **Authentication → Sign In / Providers → Google**. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an **OAuth client ID** (type: Web application) and add the Supabase callback URL under **Authorized redirect URIs**. Paste the Client ID and secret into Supabase, turn Google on, and save.
 6. **Connect the site:** go to **Project Settings → API** and copy the **Project URL** and the **anon public** key into [`config.js`](config.js). The anon key is safe to make public: the database rules from step 2 only let each person read and change their own data. **Never** put the `service_role` key in this repo.
 
+## Account limit
+
+Pineapple AI allows at most **25 accounts**. This is enforced by the database (set up by `supabase-setup.sql`), so it can't be bypassed from the website. Existing users can always sign in. To free a spot, delete a user in **Authentication → Users**. To change the limit, edit `max_accounts` in `supabase-setup.sql` and run it again.
+
 ## Web search (optional)
 
 Pineapple AI can search the web and read links through a small Supabase Edge Function in [`supabase/functions/web/index.ts`](supabase/functions/web/index.ts). Only signed-in users can use it, with a daily limit per person (40 searches, 150 pages read).
