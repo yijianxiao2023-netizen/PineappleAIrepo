@@ -250,6 +250,8 @@
   .auth-btn:hover { border-color: var(--gold); }
   .auth-btn:disabled { opacity: .5; cursor: default; }
   .auth-note { font-size: 13px !important; min-height: 1em; }
+  .keep { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; cursor: pointer; user-select: none; margin: 2px 0 6px; }
+  .keep input { width: 17px; height: 17px; accent-color: var(--gold-dark); cursor: pointer; margin: 0; }
   .auth-note.err { color: #d9534f !important; }
   .auth-head { text-align: center; padding: 22px 18px 4px; }
   .auth-head svg { width: 44px; height: 55px; }
@@ -368,6 +370,7 @@
       <button class="auth-btn" data-provider="google">Continue with Google</button>
       <button class="auth-btn" data-provider="github">Continue with GitHub</button>
     </div>
+    <label class="keep"><input type="checkbox" id="keep-signed-in" checked> Keep me signed in</label>
     <p class="auth-note" id="auth-note"></p>
   </div>
 </dialog>
@@ -389,6 +392,7 @@ const KEYS = {
   memory: "pineapple-memory",
   mode: "pineapple-mode",
   host: "pineapple-weight-host",
+  keep: "pineapple-keep-signed-in",
 };
 const MAX_TOOL_ROUNDS = 3;
 const MAX_CHATS = 60;
@@ -1043,6 +1047,32 @@ function readAuthError() {
   return err ? err.replace(/\+/g, " ") : null;
 }
 
+const authStorage = {
+  getItem(k) {
+    try { return localStorage.getItem(k) ?? sessionStorage.getItem(k); } catch { return null; }
+  },
+  setItem(k, v) {
+    try {
+      const keep = store.get(KEYS.keep, true);
+      (keep ? localStorage : sessionStorage).setItem(k, v);
+      (keep ? sessionStorage : localStorage).removeItem(k);
+    } catch {}
+  },
+  removeItem(k) {
+    try { localStorage.removeItem(k); } catch {}
+    try { sessionStorage.removeItem(k); } catch {}
+  },
+};
+
+function clearAccountCaches() {
+  try {
+    const prefixes = [`${KEYS.chats}:`, `${KEYS.memory}:`, "pineapple-memory-updated:", "pineapple-memory-synced:"];
+    for (const k of Object.keys(localStorage)) {
+      if (prefixes.some((p) => k.startsWith(p))) localStorage.removeItem(k);
+    }
+  } catch {}
+}
+
 function cleanUrl() {
   if (location.search || location.hash) history.replaceState(null, "", location.pathname);
 }
@@ -1063,7 +1093,7 @@ async function setupAuth() {
   try {
     const mod = await import("./lib/supabase.js");
     sb = mod.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
-      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "pkce" },
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "pkce", storage: authStorage },
     });
   } catch (e) {
     console.warn("Accounts unavailable", e);
@@ -1075,6 +1105,7 @@ async function setupAuth() {
   let session = null;
   try { session = (await sb.auth.getSession()).data?.session || null; } catch (e) { console.warn(e); }
   cleanUrl();
+  if (!session && navigator.onLine) clearAccountCaches();
   await setUser(session?.user || null);
   sb.auth.onAuthStateChange((_event, s) => {
     const next = s?.user || null;
@@ -1300,6 +1331,8 @@ async function signOut() {
 
 document.querySelectorAll(".auth-btn").forEach((b) => b.addEventListener("click", () => signIn(b.dataset.provider)));
 $("auth-dialog").addEventListener("cancel", (e) => { if (!user) e.preventDefault(); });
+$("keep-signed-in").checked = store.get(KEYS.keep, true);
+$("keep-signed-in").addEventListener("change", (e) => store.set(KEYS.keep, e.target.checked));
 $("auth-dialog").addEventListener("close", () => { if (!user && appOpen) setTimeout(() => requireSignIn(), 0); });
 
 const authReady = setupAuth().catch((e) => { console.warn(e); return null; });
