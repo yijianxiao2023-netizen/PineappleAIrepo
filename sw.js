@@ -1,4 +1,4 @@
-const CACHE = "pineapple-shell-v3";
+const CACHE = "pineapple-shell-v4";
 const SHELL = [
   "./",
   "./index.html",
@@ -36,13 +36,13 @@ self.addEventListener("fetch", (event) => {
   const isPage = req.mode === "navigate" || url.pathname.endsWith("/") || url.pathname.endsWith(".html") || url.pathname.endsWith("/config.js");
   if (isPage) {
     event.respondWith(
-      fetch(req)
+      fetch(req, { cache: "no-store" })
         .then((res) => {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(req, copy));
           return res;
         })
-        .catch(() => caches.match(req).then((r) => r || caches.match("./index.html")))
+        .catch(() => caches.match(req, { ignoreSearch: true }).then((r) => r || caches.match("./index.html")))
     );
     return;
   }

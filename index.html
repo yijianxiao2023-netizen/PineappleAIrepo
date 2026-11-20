@@ -414,6 +414,7 @@ let user = null;
 let appOpen = false;
 let syncState = "";
 let syncing = null;
+let authProblem = "";
 let chats = [];
 let memory = [];
 let memoryUpdated = 0;
@@ -1048,8 +1049,17 @@ function cleanUrl() {
 
 async function setupAuth() {
   let cfg;
-  try { cfg = await import("./config.js"); } catch { return null; }
-  if (!cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) return null;
+  try {
+    cfg = await import(`./config.js?v=${Date.now()}`);
+  } catch (e) {
+    console.warn("Couldn't load config.js", e);
+    authProblem = "Couldn't load the site's sign-in settings (config.js). Refresh the page to try again.";
+    return null;
+  }
+  if (!cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) {
+    authProblem = "Sign-in isn't set up on this site yet, so Pineapple AI can't be used right now.";
+    return null;
+  }
   try {
     const mod = await import("./lib/supabase.js");
     sb = mod.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
@@ -1057,6 +1067,7 @@ async function setupAuth() {
     });
   } catch (e) {
     console.warn("Accounts unavailable", e);
+    authProblem = `Couldn't start sign-in: ${esc(String(e?.message || e)).slice(0, 200)}`;
     sb = null;
     return null;
   }
@@ -1252,7 +1263,7 @@ function openAuth(note, isError = false) {
 function requireSignIn(urlError) {
   if (user) return;
   if (!sb) {
-    openAuth("Sign-in isn't set up on this site yet, so Pineapple AI can't be used right now.", true);
+    openAuth(authProblem || "Sign-in isn't available right now. Refresh the page to try again.", true);
     document.querySelectorAll(".auth-btn").forEach((b) => (b.disabled = true));
     return;
   }
