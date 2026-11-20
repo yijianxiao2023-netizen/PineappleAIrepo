@@ -34,3 +34,35 @@ create policy "own memory" on public.memories
 
 revoke all on public.chats, public.memories from anon;
 grant select, insert, update, delete on public.chats, public.memories to authenticated;
+
+-- Web search usage limits (used by the "web" Edge Function).
+create table if not exists public.web_usage (
+  user_id uuid not null references auth.users (id) on delete cascade,
+  day date not null default current_date,
+  kind text not null,
+  count int not null default 0,
+  primary key (user_id, day, kind)
+);
+
+alter table public.web_usage enable row level security;
+revoke all on public.web_usage from anon, authenticated;
+
+create or replace function public.bump_web_usage(p_user uuid, p_kind text, p_limit int)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  n int;
+begin
+  insert into web_usage (user_id, day, kind, count)
+  values (p_user, current_date, p_kind, 1)
+  on conflict (user_id, day, kind) do update set count = web_usage.count + 1
+  returning count into n;
+  return n <= p_limit;
+end;
+$$;
+
+revoke all on function public.bump_web_usage(uuid, text, int) from public, anon, authenticated;
+grant execute on function public.bump_web_usage(uuid, text, int) to service_role;

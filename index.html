@@ -324,7 +324,7 @@
         <div id="empty">
           <svg><use href="#pine"/></svg>
           <h1>What can I help with?</h1>
-          <p>Ask me anything. I can look things up on Wikipedia and remember things you tell me.</p>
+          <p>Ask me anything. I can search the web, read links, and remember things you tell me.</p>
           <div class="chips">
             <button class="chip">Who was Ada Lovelace?</button>
             <button class="chip">How do black holes form?</button>
@@ -394,7 +394,7 @@ const KEYS = {
   host: "pineapple-weight-host",
   keep: "pineapple-keep-signed-in",
 };
-const MAX_TOOL_ROUNDS = 3;
+const MAX_TOOL_ROUNDS = 4;
 const MAX_CHATS = 60;
 const CONTEXT_TIERS = [32768, 16384, 8192, 4096];
 const KV_MB_PER_TOKEN = { "Qwen3-1.7B": 0.11, "Qwen3-4B": 0.15 };
@@ -492,6 +492,42 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+function webAvailable() {
+  return !!(sb && user);
+}
+
+function toolsPrompt() {
+  const tools = [];
+  if (webAvailable()) {
+    tools.push(`web_search: search the internet. Use it for anything current or that changes over time: news, today's events, stock prices and markets, sports scores, weather, product info, recent releases, or anything you're not sure about. Arguments: {"query": "search terms", "news": true if it's about recent news}`);
+    tools.push(`open_url: open a web page and read it, such as a promising search result or a link the user gives you. Arguments: {"url": "https://..."}`);
+  }
+  tools.push(`search_wikipedia: look up background facts (people, places, history, science, definitions). Arguments: {"query": "short search terms"}`);
+  tools.push(`remember: save a lasting fact about the user for future chats, when they share something worth remembering (name, preferences, projects, goals) or ask you to remember something. Arguments: {"fact": "short fact, e.g. The user's name is Sam"}`);
+  return `Your tools:\n${tools.map((t, i) => `${i + 1}. ${t}`).join("\n")}`;
+}
+
+async function callWeb(body) {
+  if (!webAvailable()) throw new Error("Sign in to use web search.");
+  if (!navigator.onLine) throw new Error("You're offline.");
+  const { data, error } = await sb.functions.invoke("web", { body });
+  if (error) {
+    let msg = error.message || "Web tools are unavailable.";
+    try {
+      const j = await error.context?.json?.();
+      if (j?.error) msg = j.error;
+    } catch {}
+    if (/not found|404|failed to send/i.test(msg)) msg = "Web search isn't set up on this site yet.";
+    throw new Error(msg);
+  }
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
+function hostOf(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
+}
+
 function systemPrompt(chat) {
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
   const mem = memory.length
@@ -500,14 +536,13 @@ function systemPrompt(chat) {
   return `You are Pineapple AI, a friendly, smart and helpful assistant. Today is ${today}.
 Never reveal what underlying model you are, who trained you, or what company made you. If asked, say you are Pineapple AI.${mem}${chat?.summary ? `\n\nSummary of the earlier part of this chat (older messages are no longer shown to you word for word):\n${chat.summary}` : ""}
 
-You have two tools:
-1. search_wikipedia: look up facts you aren't sure about (people, places, history, science, events, statistics). Arguments: {"query": "short search terms"}
-2. remember: save a lasting fact about the user for future chats, when they share something worth remembering (name, preferences, projects, goals) or ask you to remember something. Arguments: {"fact": "short fact, e.g. The user's name is Sam"}
+${toolsPrompt()}
 To use a tool, reply with ONLY:
 <tool_call>
 {"name": "TOOL_NAME", "arguments": {...}}
 </tool_call>
-Results come back in <tool_response>, then you continue. Don't use tools for greetings, math, coding, opinions, or creative writing.
+Results come back in <tool_response>, then you continue. You can use several tools in a row (for example, search the web, then open the best result). Don't use tools for greetings, math, coding, opinions, or creative writing.
+When you use results, base your answer on them, mention which sites they came from, and never make up numbers, prices, scores, or dates. If the results don't answer the question, say so.
 Write clear, well-organized answers. Use short paragraphs and bullet lists when helpful.`;
 }
 
@@ -819,7 +854,7 @@ function addSources(wrap, sources) {
   if (!links.length) return;
   const box = document.createElement("div");
   box.className = "sources";
-  box.innerHTML = links.map((s) => `<a href="${esc(s.url)}" target="_blank" rel="noopener">📖 ${esc(s.title)}</a>`).join("");
+  box.innerHTML = links.map((s) => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${s.icon || "📖"} ${esc(s.title)}</a>`).join("");
   wrap.appendChild(box);
 }
 
@@ -1031,7 +1066,7 @@ async function send(textOverride) {
   let history;
 
   try {
-    await fitContext(chat, wrap, text.length + 2500);
+    await fitContext(chat, wrap, text.length + (webAvailable() ? 6000 : 2500));
     system = { role: "system", content: systemPrompt(chat) };
     history = contextFor(chat);
     for (let round = 0; ; round++) {
@@ -1058,12 +1093,45 @@ async function send(textOverride) {
         addStatus(wrap, label, true);
         statuses.push(label);
         payload = fact ? "Saved." : "Nothing to save.";
+      } else if (call.name === "web_search") {
+        const query = String(call.args.query || text).trim().slice(0, 200);
+        const status = addStatus(wrap, `Searching the web for “${query}”`);
+        try {
+          const data = await callWeb({ action: "search", query, news: call.args.news === true });
+          const results = (data.results || []).filter((r) => r.url);
+          sources.push(...results.map((r) => ({ title: r.title || hostOf(r.url), url: r.url, icon: "🔗" })));
+          const each = Math.max(250, Math.min(600, Math.floor(CONTEXT_CHARS * 0.04)));
+          payload = results.length
+            ? results.map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${String(r.snippet || "").slice(0, each)}`).join("\n\n")
+            : "No web results found.";
+        } catch (e) {
+          payload = `Web search failed: ${e.message} Answer from what you know if you can, and tell the user you couldn't search the web.`;
+        }
+        const label = `Searched the web for “${query}”`;
+        status.classList.add("done");
+        status.lastElementChild.textContent = label;
+        statuses.push(label);
+      } else if (call.name === "open_url") {
+        const url = String(call.args.url || "").trim();
+        const status = addStatus(wrap, `Reading ${hostOf(url)}`);
+        try {
+          const page = await callWeb({ action: "open", url });
+          const limit = Math.max(1200, Math.min(6000, Math.floor(CONTEXT_CHARS * 0.25)));
+          sources.push({ title: page.title || hostOf(page.url || url), url: page.url || url, icon: "🔗" });
+          payload = `Page: ${page.title}\nURL: ${page.url}\n\n${String(page.text || "").slice(0, limit)}`;
+        } catch (e) {
+          payload = `Couldn't open that page: ${e.message} Try a different result, or answer from what you have.`;
+        }
+        const label = `Read ${hostOf(url)}`;
+        status.classList.add("done");
+        status.lastElementChild.textContent = label;
+        statuses.push(label);
       } else if (call.name === "search_wikipedia") {
         const query = String(call.args.query || text).trim().slice(0, 120);
         const status = addStatus(wrap, `Searching Wikipedia for “${query}”`);
         try {
           const results = await searchWikipedia(query);
-          sources.push(...results);
+          sources.push(...results.map((r) => ({ ...r, icon: "📖" })));
           payload = results.length
             ? results.map((r, i) => `[${i + 1}] ${r.title}\n${r.text}`).join("\n\n")
             : "No Wikipedia results found.";

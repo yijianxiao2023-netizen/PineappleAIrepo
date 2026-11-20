@@ -25,12 +25,23 @@ Everyone must sign in with Google or GitHub to use Pineapple AI. Their chats and
 5. **Turn on Google sign-in:** go to **Authentication → Sign In / Providers → Google**. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an **OAuth client ID** (type: Web application) and add the Supabase callback URL under **Authorized redirect URIs**. Paste the Client ID and secret into Supabase, turn Google on, and save.
 6. **Connect the site:** go to **Project Settings → API** and copy the **Project URL** and the **anon public** key into [`config.js`](config.js). The anon key is safe to make public: the database rules from step 2 only let each person read and change their own data. **Never** put the `service_role` key in this repo.
 
+## Web search (optional)
+
+Pineapple AI can search the web and read links through a small Supabase Edge Function in [`supabase/functions/web/index.ts`](supabase/functions/web/index.ts). Only signed-in users can use it, with a daily limit per person (40 searches, 150 pages read).
+
+1. **Update the database:** run [`supabase-setup.sql`](supabase-setup.sql) again in **SQL Editor**. It's safe to re-run, and it adds the usage-limit table.
+2. **Get a search key:** sign up free at [tavily.com](https://tavily.com) and copy your API key. Optionally, add an [Exa](https://exa.ai) key as a backup.
+3. **Store the key in Supabase:** go to **Edge Functions → Secrets** and add `TAVILY_API_KEY` (and optionally `EXA_API_KEY`). **Never** put these keys in this repo.
+4. **Deploy the function:** go to **Edge Functions → Deploy a new function → Via Editor**. Name it exactly `web`, paste in everything from `supabase/functions/web/index.ts`, and click **Deploy**.
+
+Reading web pages doesn't use the search quota. Only searches do.
+
 ## Credits
 
 - Created by **SlaxY1r** ([yijianxiao2023-netizen](https://github.com/yijianxiao2023-netizen))
 - Runs on [WebLLM](https://github.com/mlc-ai/web-llm) by the MLC AI team (Apache 2.0)
 - Language models: [Qwen3](https://github.com/QwenLM/Qwen3) by the Qwen team (Apache 2.0)
-- Search results from [Wikipedia](https://www.wikipedia.org/)
+- Search results from [Wikipedia](https://www.wikipedia.org/) and [Tavily](https://tavily.com)
 
 ## License
 
