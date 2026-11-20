@@ -163,6 +163,14 @@
   .status span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--gold); animation: pulse 1s ease-in-out infinite; flex-shrink: 0; }
   .status.done .dot { background: var(--leaf); animation: none; }
+  .status.err { color: #c0392b; border-color: color-mix(in srgb, #c0392b 35%, var(--line)); }
+  .status.err .dot { background: #c0392b; animation: none; }
+  #web-toggle {
+    height: 36px; padding: 0 12px; border-radius: 99px; border: 1px solid var(--line); background: var(--bg);
+    font-size: 13.5px; cursor: pointer; flex-shrink: 0; align-self: center; color: var(--muted); white-space: nowrap;
+  }
+  #web-toggle:hover { border-color: var(--gold); color: var(--ink); }
+  #web-toggle.on { background: color-mix(in srgb, var(--gold) 22%, var(--panel)); border-color: var(--gold); color: var(--ink); font-weight: 600; }
   @keyframes pulse { 50% { opacity: .3; } }
 
   .sources { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -184,13 +192,13 @@
     max-width: 760px; margin: 0 auto;
     display: flex; align-items: flex-end; gap: 8px;
     background: var(--panel); border: 1px solid var(--line);
-    border-radius: 24px; padding: 8px 8px 8px 18px;
+    border-radius: 24px; padding: 8px 8px 8px 8px;
     box-shadow: 0 4px 24px rgba(120, 90, 20, .08);
   }
   .composer:focus-within { border-color: var(--gold); }
   textarea {
     flex: 1; border: 0; outline: 0; resize: none; background: transparent; color: var(--ink);
-    font: inherit; padding: 8px 0; max-height: 180px;
+    font: inherit; padding: 8px 0 8px 10px; max-height: 180px;
   }
   #send {
     width: 40px; height: 40px; border-radius: 50%; border: 0; cursor: pointer;
@@ -336,6 +344,7 @@
     </div>
     <footer>
       <div class="composer">
+        <button id="web-toggle" title="Search the web for your next message" hidden>🌐 Search</button>
         <textarea id="input" rows="1" placeholder="Message Pineapple AI"></textarea>
         <button id="send" aria-label="Send"></button>
       </div>
@@ -487,6 +496,7 @@ function loadLocal() {
 loadLocal();
 let mode = store.get(KEYS.mode, "fast") === "smart" ? "smart" : "fast";
 let currentId = null;
+let forceWeb = false;
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -501,6 +511,7 @@ function toolsPrompt() {
   if (webAvailable()) {
     tools.push(`web_search: search the internet. Use it for anything current or that changes over time: news, today's events, stock prices and markets, sports scores, weather, product info, recent releases, or anything you're not sure about. Arguments: {"query": "search terms", "news": true if it's about recent news}`);
     tools.push(`open_url: open a web page and read it, such as a promising search result or a link the user gives you. Arguments: {"url": "https://..."}`);
+    tools.push(`stock_quote: get the live price of a stock or ETF. Use the ticker symbol (NVIDIA is NVDA, Apple is AAPL, the S&P 500 is SPY). Arguments: {"symbol": "NVDA"}`);
   }
   tools.push(`search_wikipedia: look up background facts (people, places, history, science, definitions). Arguments: {"query": "short search terms"}`);
   tools.push(`remember: save a lasting fact about the user for future chats, when they share something worth remembering (name, preferences, projects, goals) or ask you to remember something. Arguments: {"fact": "short fact, e.g. The user's name is Sam"}`);
@@ -513,11 +524,14 @@ async function callWeb(body) {
   const { data, error } = await sb.functions.invoke("web", { body });
   if (error) {
     let msg = error.message || "Web tools are unavailable.";
+    const status = error.context?.status;
     try {
       const j = await error.context?.json?.();
-      if (j?.error) msg = j.error;
+      msg = j?.error || j?.message || j?.msg || msg;
     } catch {}
-    if (/not found|404|failed to send/i.test(msg)) msg = "Web search isn't set up on this site yet.";
+    if (status === 404 || /not found|failed to send|fetch/i.test(msg)) msg = "web search isn't set up yet (the \"web\" function isn't deployed on Supabase).";
+    else if (status === 401) msg = "your sign-in expired. Sign out and back in.";
+    else if (/TAVILY|search service/i.test(msg)) msg = "the search key isn't set (add TAVILY_API_KEY in Supabase Edge Function secrets).";
     throw new Error(msg);
   }
   if (data?.error) throw new Error(data.error);
@@ -526,6 +540,147 @@ async function callWeb(body) {
 
 function hostOf(url) {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
+}
+
+function finishStatus(status, label, statuses, failed = false) {
+  status.classList.add(failed ? "err" : "done");
+  status.lastElementChild.textContent = label;
+  statuses.push(label);
+}
+
+async function runTool(call, ctx) {
+  const { wrap, sources, statuses, text } = ctx;
+  const name = call.name;
+  const args = call.args || {};
+
+  if (name === "remember") {
+    const fact = String(args.fact || "").trim().slice(0, 200);
+    if (fact && !memory.includes(fact)) {
+      memory.push(fact);
+      saveMemory();
+    }
+    const label = fact ? `Saved to memory: ${fact}` : "Tried to save a memory";
+    addStatus(wrap, label, true);
+    statuses.push(label);
+    return fact ? "Saved." : "Nothing to save.";
+  }
+
+  if (name === "web_search") {
+    const query = String(args.query || text).trim().slice(0, 200);
+    const status = addStatus(wrap, `Searching the web for “${query}”`);
+    try {
+      const data = await callWeb({ action: "search", query, news: args.news === true });
+      const results = (data.results || []).filter((r) => r.url);
+      sources.push(...results.map((r) => ({ title: r.title || hostOf(r.url), url: r.url, icon: "🔗" })));
+      const each = Math.max(250, Math.min(600, Math.floor(CONTEXT_CHARS * 0.04)));
+      const list = results.map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${String(r.snippet || "").slice(0, each)}`).join("\n\n");
+      finishStatus(status, `Searched the web for “${query}”`, statuses);
+      if (!results.length && !data.answer) return "No web results found.";
+      return `${data.answer ? `Quick answer from the search engine: ${data.answer}\n\n` : ""}${list}`;
+    } catch (e) {
+      finishStatus(status, `Web search failed: ${e.message}`, statuses, true);
+      return `Web search failed: ${e.message} Tell the user you couldn't search the web, and only answer from what you know if you're confident. Never guess current numbers like prices.`;
+    }
+  }
+
+  if (name === "open_url") {
+    const url = String(args.url || "").trim();
+    const status = addStatus(wrap, `Reading ${hostOf(url)}`);
+    try {
+      const page = await callWeb({ action: "open", url });
+      const limit = Math.max(1200, Math.min(6000, Math.floor(CONTEXT_CHARS * 0.25)));
+      sources.push({ title: page.title || hostOf(page.url || url), url: page.url || url, icon: "🔗" });
+      finishStatus(status, `Read ${hostOf(url)}`, statuses);
+      return `Page: ${page.title}\nURL: ${page.url}\n\n${String(page.text || "").slice(0, limit)}`;
+    } catch (e) {
+      finishStatus(status, `Couldn't open ${hostOf(url)}: ${e.message}`, statuses, true);
+      return `Couldn't open that page: ${e.message} Try a different result, or answer from what you have.`;
+    }
+  }
+
+  if (name === "stock_quote") {
+    const symbol = String(args.symbol || args.query || "").trim().slice(0, 60);
+    const status = addStatus(wrap, `Getting stock price for ${symbol.toUpperCase()}`);
+    try {
+      const q = await callWeb({ action: "quote", symbol });
+      if (q.url) sources.push({ title: `${q.symbol} quote (${q.source})`, url: q.url, icon: "📈" });
+      finishStatus(status, `Got stock price for ${q.symbol}`, statuses);
+      const fmt = (n) => (typeof n === "number" && isFinite(n) ? n.toFixed(2) : "n/a");
+      const change = typeof q.change === "number" ? `\nChange today: ${q.change >= 0 ? "+" : ""}${fmt(q.change)} (${q.changePercent >= 0 ? "+" : ""}${fmt(q.changePercent)}%)` : "";
+      return `Stock quote for ${q.symbol} from ${q.source}${q.time ? ` (as of ${q.time})` : ""}:\nPrice: $${fmt(q.price)}${change}\nOpen: $${fmt(q.open)}  High: $${fmt(q.high)}  Low: $${fmt(q.low)}${q.previousClose ? `  Previous close: $${fmt(q.previousClose)}` : ""}${q.note ? `\n${q.note}` : ""}`;
+    } catch (e) {
+      finishStatus(status, `Couldn't get stock price: ${e.message}`, statuses, true);
+      return `Stock quote failed: ${e.message} Try web_search instead.`;
+    }
+  }
+
+  if (name === "search_wikipedia") {
+    const query = String(args.query || text).trim().slice(0, 120);
+    const status = addStatus(wrap, `Searching Wikipedia for “${query}”`);
+    try {
+      const results = await searchWikipedia(query);
+      sources.push(...results.map((r) => ({ ...r, icon: "📖" })));
+      finishStatus(status, `Searched Wikipedia for “${query}”`, statuses);
+      return results.length
+        ? results.map((r, i) => `[${i + 1}] ${r.title}\n${r.text}`).join("\n\n")
+        : "No Wikipedia results found.";
+    } catch {
+      finishStatus(status, `Wikipedia search failed`, statuses, true);
+      return navigator.onLine
+        ? "The search failed. Answer from what you know and say you couldn't look it up."
+        : "You are offline, so search is unavailable. Answer from what you know and mention you couldn't look it up.";
+    }
+  }
+
+  return "Unknown tool. Answer the user directly.";
+}
+
+const TICKERS = {
+  nvidia: "NVDA", apple: "AAPL", microsoft: "MSFT", google: "GOOGL", alphabet: "GOOGL", amazon: "AMZN",
+  meta: "META", facebook: "META", tesla: "TSLA", netflix: "NFLX", amd: "AMD", intel: "INTC",
+  broadcom: "AVGO", tsmc: "TSM", oracle: "ORCL", ibm: "IBM", disney: "DIS", walmart: "WMT",
+  "coca-cola": "KO", coke: "KO", nike: "NKE", boeing: "BA", jpmorgan: "JPM", visa: "V",
+  mastercard: "MA", berkshire: "BRK.B", palantir: "PLTR", salesforce: "CRM", adobe: "ADBE",
+  qualcomm: "QCOM", uber: "UBER", spotify: "SPOT", paypal: "PYPL", costco: "COST", starbucks: "SBUX",
+  "s&p 500": "SPY", "s&p": "SPY", nasdaq: "QQQ", dow: "DIA", "dow jones": "DIA",
+};
+
+function findTickers(text) {
+  const found = new Set();
+  const lower = text.toLowerCase();
+  for (const [name, sym] of Object.entries(TICKERS)) {
+    const re = new RegExp(`(^|[^a-z])${name.replace(/[.*+?^${}()|[\]\\&]/g, "\\$&")}('?s)?([^a-z]|$)`);
+    if (re.test(lower)) found.add(sym);
+  }
+  for (const m of text.matchAll(/\$([A-Za-z]{1,5})\b/g)) found.add(m[1].toUpperCase());
+  for (const m of text.matchAll(/\b([A-Z]{2,5})\b/g)) {
+    if (!["I", "AI", "OK", "US", "USA", "CEO", "IPO", "ETF", "GDP", "AND", "THE", "FOR", "WHAT", "HOW", "NEWS", "TODAY"].includes(m[1]) && /stock|share|price|ticker|trading/i.test(text)) found.add(m[1]);
+  }
+  return [...found].slice(0, 3);
+}
+
+function looksFinancial(text) {
+  return /\b(stocks?|shares?|share price|stock price|ticker|market cap|trading at|nasdaq|s&p|dow jones|earnings)\b/i.test(text);
+}
+
+function needsWeb(text) {
+  return looksFinancial(text) ||
+    /\b(today|tonight|right now|currently|current|latest|recent(ly)?|this (week|month|year)|yesterday|tomorrow|news|headlines?|price|prices|cost of|crypto|bitcoin|ethereum|score|scores|who won|standings|weather|forecast|election|released?|launch(ed)?|update|20[2-3]\d|ceo of|president of|prime minister|live)\b/i.test(text);
+}
+
+async function prefetchWeb(text, forced, ctx, turn) {
+  if (!webAvailable()) return;
+  if (!forced && !needsWeb(text)) return;
+  const calls = [];
+  if (looksFinancial(text)) {
+    for (const sym of findTickers(text)) calls.push({ name: "stock_quote", args: { symbol: sym } });
+  }
+  calls.push({ name: "web_search", args: { query: text.slice(0, 200), news: /\bnews|headlines?\b/i.test(text) } });
+  for (const call of calls) {
+    const payload = await runTool(call, ctx);
+    turn.push({ role: "assistant", content: `<tool_call>\n${JSON.stringify({ name: call.name, arguments: call.args })}\n</tool_call>` });
+    turn.push({ role: "user", content: `<tool_response>\n${payload}\n</tool_response>` });
+  }
 }
 
 function systemPrompt(chat) {
@@ -1069,6 +1224,11 @@ async function send(textOverride) {
     await fitContext(chat, wrap, text.length + (webAvailable() ? 6000 : 2500));
     system = { role: "system", content: systemPrompt(chat) };
     history = contextFor(chat);
+    const forced = forceWeb;
+    forceWeb = false;
+    renderWebToggle();
+    await prefetchWeb(text, forced, { wrap, sources, statuses, text }, turn);
+    if (turn.length > 1) body.innerHTML = TYPING;
     for (let round = 0; ; round++) {
       const raw = await generate([system, ...history, ...turn], (full) => {
         const v = visibleText(full);
@@ -1082,71 +1242,7 @@ async function send(textOverride) {
       }
 
       body.innerHTML = TYPING;
-      let payload;
-      if (call.name === "remember") {
-        const fact = String(call.args.fact || "").trim().slice(0, 200);
-        if (fact && !memory.includes(fact)) {
-          memory.push(fact);
-          saveMemory();
-        }
-        const label = fact ? `Saved to memory: ${fact}` : "Tried to save a memory";
-        addStatus(wrap, label, true);
-        statuses.push(label);
-        payload = fact ? "Saved." : "Nothing to save.";
-      } else if (call.name === "web_search") {
-        const query = String(call.args.query || text).trim().slice(0, 200);
-        const status = addStatus(wrap, `Searching the web for “${query}”`);
-        try {
-          const data = await callWeb({ action: "search", query, news: call.args.news === true });
-          const results = (data.results || []).filter((r) => r.url);
-          sources.push(...results.map((r) => ({ title: r.title || hostOf(r.url), url: r.url, icon: "🔗" })));
-          const each = Math.max(250, Math.min(600, Math.floor(CONTEXT_CHARS * 0.04)));
-          payload = results.length
-            ? results.map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${String(r.snippet || "").slice(0, each)}`).join("\n\n")
-            : "No web results found.";
-        } catch (e) {
-          payload = `Web search failed: ${e.message} Answer from what you know if you can, and tell the user you couldn't search the web.`;
-        }
-        const label = `Searched the web for “${query}”`;
-        status.classList.add("done");
-        status.lastElementChild.textContent = label;
-        statuses.push(label);
-      } else if (call.name === "open_url") {
-        const url = String(call.args.url || "").trim();
-        const status = addStatus(wrap, `Reading ${hostOf(url)}`);
-        try {
-          const page = await callWeb({ action: "open", url });
-          const limit = Math.max(1200, Math.min(6000, Math.floor(CONTEXT_CHARS * 0.25)));
-          sources.push({ title: page.title || hostOf(page.url || url), url: page.url || url, icon: "🔗" });
-          payload = `Page: ${page.title}\nURL: ${page.url}\n\n${String(page.text || "").slice(0, limit)}`;
-        } catch (e) {
-          payload = `Couldn't open that page: ${e.message} Try a different result, or answer from what you have.`;
-        }
-        const label = `Read ${hostOf(url)}`;
-        status.classList.add("done");
-        status.lastElementChild.textContent = label;
-        statuses.push(label);
-      } else if (call.name === "search_wikipedia") {
-        const query = String(call.args.query || text).trim().slice(0, 120);
-        const status = addStatus(wrap, `Searching Wikipedia for “${query}”`);
-        try {
-          const results = await searchWikipedia(query);
-          sources.push(...results.map((r) => ({ ...r, icon: "📖" })));
-          payload = results.length
-            ? results.map((r, i) => `[${i + 1}] ${r.title}\n${r.text}`).join("\n\n")
-            : "No Wikipedia results found.";
-        } catch {
-          payload = navigator.onLine
-            ? "The search failed. Answer from what you know and say you couldn't look it up."
-            : "You are offline, so search is unavailable. Answer from what you know and mention you couldn't look it up.";
-        }
-        const label = `Searched Wikipedia for “${query}”`;
-        status.classList.add("done");
-        status.lastElementChild.textContent = label;
-        statuses.push(label);
-      } else {
-        payload = "Unknown tool. Answer the user directly.";
-      }
+      let payload = await runTool(call, { wrap, sources, statuses, text });
       if (round === MAX_TOOL_ROUNDS - 1) payload += "\n\nNow answer the user. Do not use any more tools.";
 
       turn.push({ role: "assistant", content: raw });
@@ -1181,6 +1277,13 @@ async function send(textOverride) {
 
   setBusy(false);
   $("input").focus();
+}
+
+function renderWebToggle() {
+  const btn = $("web-toggle");
+  if (!btn) return;
+  btn.hidden = !webAvailable();
+  btn.classList.toggle("on", forceWeb);
 }
 
 function renderMode() {
@@ -1226,6 +1329,7 @@ $("input").addEventListener("keydown", (e) => {
   }
 });
 $("new-chat").addEventListener("click", newChat);
+$("web-toggle").addEventListener("click", () => { forceWeb = !forceWeb; renderWebToggle(); $("input").focus(); });
 $("menu").addEventListener("click", openSidebar);
 $("backdrop").addEventListener("click", closeSidebar);
 document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => send(c.textContent)));
@@ -1343,7 +1447,7 @@ async function setUser(next) {
     if (!getChat(currentId)) newChat();
     renderChatList();
   }
-  if (appOpen) renderAccount();
+  if (appOpen) { renderAccount(); renderWebToggle(); }
   if (user) {
     if ($("auth-dialog").open) $("auth-dialog").close();
     syncAll();

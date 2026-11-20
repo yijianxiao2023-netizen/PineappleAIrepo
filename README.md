@@ -31,10 +31,10 @@ Pineapple AI can search the web and read links through a small Supabase Edge Fun
 
 1. **Update the database:** run [`supabase-setup.sql`](supabase-setup.sql) again in **SQL Editor**. It's safe to re-run, and it adds the usage-limit table.
 2. **Get a search key:** sign up free at [tavily.com](https://tavily.com) and copy your API key. Optionally, add an [Exa](https://exa.ai) key as a backup.
-3. **Store the key in Supabase:** go to **Edge Functions → Secrets** and add `TAVILY_API_KEY` (and optionally `EXA_API_KEY`). **Never** put these keys in this repo.
+3. **Store the key in Supabase:** go to **Edge Functions → Secrets** and add `TAVILY_API_KEY` (and optionally `EXA_API_KEY`). For better live stock prices, also add a free [Finnhub](https://finnhub.io) key as `FINNHUB_API_KEY`; without it, stock quotes come from Stooq and may be about 15 minutes behind. **Never** put these keys in this repo.
 4. **Deploy the function:** go to **Edge Functions → Deploy a new function → Via Editor**. Name it exactly `web`, paste in everything from `supabase/functions/web/index.ts`, and click **Deploy**.
 
-Reading web pages doesn't use the search quota. Only searches do.
+Reading web pages doesn't use the search quota. Only searches do. **After changing `index.ts`, redeploy the function** by pasting the new code into the same function and clicking Deploy again.
 
 ## Credits
 

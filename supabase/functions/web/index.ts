@@ -1,6 +1,7 @@
 // Pineapple AI web tools: search the web and read web pages.
 // Deploy as a Supabase Edge Function named "web".
-// Secrets (Edge Functions → Secrets): TAVILY_API_KEY (required), EXA_API_KEY (optional backup).
+// Secrets (Edge Functions → Secrets): TAVILY_API_KEY (required), EXA_API_KEY (optional backup),
+// FINNHUB_API_KEY (optional, better stock quotes).
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -10,7 +11,7 @@ const CORS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const DAILY_LIMITS: Record<string, number> = { search: 40, open: 150 };
+const DAILY_LIMITS: Record<string, number> = { search: 40, open: 150, quote: 200 };
 const MAX_PAGE_BYTES = 2_000_000;
 const MAX_PAGE_CHARS = 12_000;
 
@@ -45,12 +46,14 @@ async function search(query: string, news: boolean) {
           max_results: 5,
           search_depth: "basic",
           topic: news ? "news" : "general",
+          include_answer: "basic",
         }),
       }, 15000);
       if (!r.ok) throw new Error(`Tavily returned ${r.status}`);
       const d = await r.json();
       return {
         provider: "tavily",
+        answer: clip(d.answer || "", 800),
         results: (d.results || []).map((x: any) => ({
           title: clip(x.title, 200),
           url: String(x.url || ""),
@@ -91,6 +94,71 @@ async function search(query: string, news: boolean) {
   }
 
   throw new Error(problems.length ? `Search failed: ${problems.join("; ")}` : "No search service is set up. Add TAVILY_API_KEY in Edge Function secrets.");
+}
+
+async function quote(raw: string) {
+  const q = raw.trim().replace(/^\$/, "");
+  if (!q) throw new Error("No stock symbol given");
+  const finnhub = Deno.env.get("FINNHUB_API_KEY");
+  let symbol = q.toUpperCase();
+
+  if (finnhub) {
+    const getQuote = async (sym: string) => {
+      const r = await fetchWithTimeout(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(sym)}&token=${finnhub}`, {}, 10000);
+      if (!r.ok) return null;
+      const d = await r.json();
+      return d && Number(d.c) > 0 ? d : null;
+    };
+    const lookup = async () => {
+      const r = await fetchWithTimeout(`https://finnhub.io/api/v1/search?q=${encodeURIComponent(q)}&token=${finnhub}`, {}, 10000);
+      const d = r.ok ? await r.json() : null;
+      const hit = (d?.result || []).find((x: any) => x.type === "Common Stock" && !String(x.symbol).includes(".")) || d?.result?.[0];
+      return hit?.symbol ? String(hit.symbol) : null;
+    };
+    let d = /^[A-Z][A-Z0-9.\-]{0,9}$/.test(symbol) ? await getQuote(symbol) : null;
+    if (!d) {
+      const found = await lookup();
+      if (found) {
+        symbol = found;
+        d = await getQuote(found);
+      }
+    }
+    if (d) {
+      return {
+        symbol,
+        price: d.c,
+        change: d.d,
+        changePercent: d.dp,
+        open: d.o,
+        high: d.h,
+        low: d.l,
+        previousClose: d.pc,
+        time: d.t ? new Date(d.t * 1000).toISOString() : null,
+        source: "Finnhub",
+        url: `https://finnhub.io/`,
+      };
+    }
+  }
+
+  if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(symbol)) throw new Error("Use a ticker symbol like NVDA");
+  const stooqSymbol = symbol.includes(".") ? symbol.toLowerCase() : `${symbol.toLowerCase()}.us`;
+  const r = await fetchWithTimeout(`https://stooq.com/q/l/?s=${encodeURIComponent(stooqSymbol)}&f=sd2t2ohlcv&h&e=csv`, {}, 10000);
+  if (!r.ok) throw new Error(`Quote service returned ${r.status}`);
+  const [header, row] = (await r.text()).trim().split(/\r?\n/);
+  const cols = (row || "").split(",");
+  if (!header || cols.length < 7 || cols.includes("N/D")) throw new Error(`No quote found for ${symbol}`);
+  const [, date, time, open, high, low, close] = cols;
+  return {
+    symbol,
+    price: Number(close),
+    open: Number(open),
+    high: Number(high),
+    low: Number(low),
+    time: `${date} ${time}`,
+    note: "May be delayed by about 15 minutes.",
+    source: "Stooq",
+    url: `https://stooq.com/q/?s=${encodeURIComponent(stooqSymbol)}`,
+  };
 }
 
 function decodeEntities(s: string) {
@@ -195,7 +263,7 @@ Deno.serve(async (req) => {
   let body: any;
   try { body = await req.json(); } catch { return json({ error: "Bad request" }, 400); }
   const action = body?.action;
-  if (action !== "search" && action !== "open") return json({ error: "Unknown action" }, 400);
+  if (!(action in DAILY_LIMITS)) return json({ error: "Unknown action" }, 400);
 
   const { data: allowed, error: limitError } = await admin.rpc("bump_web_usage", {
     p_user: user.id,
@@ -204,11 +272,13 @@ Deno.serve(async (req) => {
   });
   if (limitError) console.warn("Usage limit check failed", limitError.message);
   else if (allowed === false) {
-    return json({ error: `Daily ${action === "search" ? "web search" : "page reading"} limit reached. Try again tomorrow.` }, 429);
+    const what = action === "search" ? "web search" : action === "open" ? "page reading" : "stock quote";
+    return json({ error: `Daily ${what} limit reached. Try again tomorrow.` }, 429);
   }
 
   try {
     if (action === "search") return json(await search(String(body.query || "").slice(0, 300), body.news === true));
+    if (action === "quote") return json(await quote(String(body.symbol || "").slice(0, 60)));
     return json(await openUrl(String(body.url || "")));
   } catch (e) {
     return json({ error: clip((e as Error)?.message || e, 300) }, 502);
